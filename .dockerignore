@@ -1,0 +1,8 @@
+*.db
+*.sqlite
+*.sqlite3
+.git
+.gitignore
+README.md
+Dockerfile
+.dockerignore
