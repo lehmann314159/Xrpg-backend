@@ -4,16 +4,18 @@ import "time"
 
 // Character represents a player character
 type Character struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	HP            int       `json:"hp"`
-	MaxHP         int       `json:"max_hp"`
-	Strength      int       `json:"strength"`
-	Dexterity     int       `json:"dexterity"`
-	CurrentRoomID string    `json:"current_room_id"`
-	IsAlive       bool      `json:"is_alive"`
-	CreatedAt     time.Time `json:"created_at"`
-	DiedAt        *time.Time `json:"died_at,omitempty"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	HP              int        `json:"hp"`
+	MaxHP           int        `json:"max_hp"`
+	Strength        int        `json:"strength"`
+	Dexterity       int        `json:"dexterity"`
+	CurrentRoomID   string     `json:"current_room_id"`
+	IsAlive         bool       `json:"is_alive"`
+	CreatedAt       time.Time  `json:"created_at"`
+	DiedAt          *time.Time `json:"died_at,omitempty"`
+	EquippedWeaponID *string   `json:"equipped_weapon_id,omitempty"`
+	EquippedArmorID  *string   `json:"equipped_armor_id,omitempty"`
 }
 
 // Room represents a location in the dungeon

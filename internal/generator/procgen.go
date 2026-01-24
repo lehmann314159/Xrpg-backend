@@ -304,6 +304,7 @@ type ItemTemplate struct {
 	Description string
 	Type        string
 	Damage      int
+	Armor       int
 	Healing     int
 }
 
@@ -320,6 +321,8 @@ var itemTemplates = []ItemTemplate{
 	{Name: "Greater Health Potion", Description: "A large red vial that restores significant health.", Type: "consumable", Healing: 20},
 	{Name: "Rusty Sword", Description: "An old sword, still sharp enough to cut.", Type: "weapon", Damage: 3},
 	{Name: "Short Sword", Description: "A well-balanced blade.", Type: "weapon", Damage: 5},
+	{Name: "Wooden Shield", Description: "A simple wooden shield that provides basic protection.", Type: "armor", Armor: 2},
+	{Name: "Iron Shield", Description: "A sturdy iron shield.", Type: "armor", Armor: 4},
 }
 
 // PopulateRoom adds monsters, items, and traps to a room
@@ -400,6 +403,7 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 			Description: template.Description,
 			Type:        template.Type,
 			Damage:      template.Damage,
+			Armor:       template.Armor,
 			Healing:     template.Healing,
 			RoomID:      &room.ID,
 		}

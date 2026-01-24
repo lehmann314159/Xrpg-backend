@@ -49,15 +49,17 @@ func CalculateAttack(attackerStrength, defenderArmor int) *CombatResult {
 }
 
 // ExecuteCombatTurn executes one full turn of combat
+// weaponBonus is extra damage from equipped weapon
+// armorBonus is extra defense from equipped armor
 // Returns updated combat state and whether combat continues
-func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string) (*CombatResult, bool) {
+func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string, weaponBonus int, armorBonus int) (*CombatResult, bool) {
 	result := &CombatResult{
 		AttackerHP: player.HP,
 		DefenderHP: monster.HP,
 	}
 
-	// Calculate player's weapon damage bonus
-	playerDamageBonus := player.Strength / 2
+	// Calculate player's damage bonus (base strength + equipped weapon)
+	playerDamageBonus := (player.Strength / 2) + weaponBonus
 
 	// Player attacks monster
 	attackRoll := RollDice(20) + (player.Dexterity / 2)
@@ -91,7 +93,8 @@ func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string)
 
 	// Monster counter-attacks
 	monsterAttackRoll := RollDice(20)
-	playerDefense := 10 + (player.Dexterity / 2)
+	// Player defense includes dexterity and equipped armor
+	playerDefense := 10 + (player.Dexterity / 2) + armorBonus
 
 	if monsterAttackRoll >= playerDefense {
 		// Monster hits

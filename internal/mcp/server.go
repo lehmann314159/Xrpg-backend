@@ -147,6 +147,20 @@ func (s *Server) ListTools() []Tool {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			Name:        "equip",
+			Description: "Equip a weapon or armor from your inventory",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"item_id": map[string]interface{}{
+						"type":        "string",
+						"description": "ID of the item to equip",
+					},
+				},
+				"required": []string{"item_id"},
+			},
+		},
 	}
 }
 
@@ -191,6 +205,12 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 		return s.handleStats()
 	case "map":
 		return s.handleMap()
+	case "equip":
+		itemID, ok := arguments["item_id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid item_id")
+		}
+		return s.handleEquip(itemID)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -441,8 +461,24 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 		}, nil
 	}
 
+	// Calculate equipment bonuses
+	weaponBonus := 0
+	armorBonus := 0
+	if s.state.Character.EquippedWeaponID != nil {
+		weapon := s.state.Items[*s.state.Character.EquippedWeaponID]
+		if weapon != nil {
+			weaponBonus = weapon.Damage
+		}
+	}
+	if s.state.Character.EquippedArmorID != nil {
+		armor := s.state.Items[*s.state.Character.EquippedArmorID]
+		if armor != nil {
+			armorBonus = armor.Armor
+		}
+	}
+
 	// Execute combat turn
-	result, _ := game.ExecuteCombatTurn(s.state.Character, monster, "attack")
+	result, _ := game.ExecuteCombatTurn(s.state.Character, monster, "attack", weaponBonus, armorBonus)
 
 	var sb strings.Builder
 	sb.WriteString("=== COMBAT ===\n\n")
@@ -544,13 +580,20 @@ func (s *Server) handleInventory() (*ToolResult, error) {
 		sb.WriteString("Your inventory is empty.\n")
 	} else {
 		for _, item := range items {
-			sb.WriteString(fmt.Sprintf("- %s [ID: %s]\n", item.Name, item.ID))
+			equippedMarker := ""
+			if item.IsEquipped {
+				equippedMarker = " [EQUIPPED]"
+			}
+			sb.WriteString(fmt.Sprintf("- %s%s [ID: %s]\n", item.Name, equippedMarker, item.ID))
 			sb.WriteString(fmt.Sprintf("  %s\n", item.Description))
 			if item.Type == "consumable" && item.Healing > 0 {
 				sb.WriteString(fmt.Sprintf("  (Heals %d HP)\n", item.Healing))
 			}
 			if item.Type == "weapon" && item.Damage > 0 {
 				sb.WriteString(fmt.Sprintf("  (Damage +%d)\n", item.Damage))
+			}
+			if item.Type == "armor" && item.Armor > 0 {
+				sb.WriteString(fmt.Sprintf("  (Armor +%d)\n", item.Armor))
 			}
 		}
 	}
@@ -589,6 +632,25 @@ func (s *Server) handleStats() (*ToolResult, error) {
 		return "Healthy"
 	}()))
 
+	// Show equipped items
+	sb.WriteString("\n--- Equipment ---\n")
+	if char.EquippedWeaponID != nil {
+		weapon := s.state.Items[*char.EquippedWeaponID]
+		if weapon != nil {
+			sb.WriteString(fmt.Sprintf("Weapon: %s (+%d damage)\n", weapon.Name, weapon.Damage))
+		}
+	} else {
+		sb.WriteString("Weapon: None (bare hands)\n")
+	}
+	if char.EquippedArmorID != nil {
+		armor := s.state.Items[*char.EquippedArmorID]
+		if armor != nil {
+			sb.WriteString(fmt.Sprintf("Armor: %s (+%d defense)\n", armor.Name, armor.Armor))
+		}
+	} else {
+		sb.WriteString("Armor: None\n")
+	}
+
 	if s.state.Victory {
 		sb.WriteString("\n🏆 VICTORIOUS 🏆\n")
 	}
@@ -620,6 +682,77 @@ func (s *Server) handleMap() (*ToolResult, error) {
 
 	return &ToolResult{
 		Content: []ContentBlock{{Type: "text", Text: mapStr}},
+	}, nil
+}
+
+// handleEquip equips a weapon or armor
+func (s *Server) handleEquip(itemID string) (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	if s.state.GameOver {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	item, ok := s.state.Items[itemID]
+	if !ok {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Item not found. Use 'inventory' to see your items."}},
+		}, nil
+	}
+
+	// Check item is in inventory
+	if item.CharacterID == nil || *item.CharacterID != s.state.Character.ID {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "That item is not in your inventory. Pick it up first with 'take'."}},
+		}, nil
+	}
+
+	char := s.state.Character
+	var sb strings.Builder
+
+	switch item.Type {
+	case "weapon":
+		// Unequip old weapon if any
+		if char.EquippedWeaponID != nil {
+			oldWeapon := s.state.Items[*char.EquippedWeaponID]
+			if oldWeapon != nil {
+				oldWeapon.IsEquipped = false
+				sb.WriteString(fmt.Sprintf("You unequip the %s.\n", oldWeapon.Name))
+			}
+		}
+		// Equip new weapon
+		char.EquippedWeaponID = &item.ID
+		item.IsEquipped = true
+		sb.WriteString(fmt.Sprintf("You equip the %s. (Damage +%d)", item.Name, item.Damage))
+
+	case "armor":
+		// Unequip old armor if any
+		if char.EquippedArmorID != nil {
+			oldArmor := s.state.Items[*char.EquippedArmorID]
+			if oldArmor != nil {
+				oldArmor.IsEquipped = false
+				sb.WriteString(fmt.Sprintf("You unequip the %s.\n", oldArmor.Name))
+			}
+		}
+		// Equip new armor
+		char.EquippedArmorID = &item.ID
+		item.IsEquipped = true
+		sb.WriteString(fmt.Sprintf("You equip the %s. (Armor +%d)", item.Name, item.Armor))
+
+	default:
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Cannot equip %s - it's not a weapon or armor.", item.Name)}},
+		}, nil
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
 	}, nil
 }
 
