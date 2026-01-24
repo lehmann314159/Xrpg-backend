@@ -1,0 +1,604 @@
+package mcp
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/yourusername/dungeon-crawler/internal/game"
+	"github.com/yourusername/dungeon-crawler/internal/generator"
+)
+
+// Server implements the MCP protocol for the dungeon crawler
+type Server struct {
+	state *game.GameState
+}
+
+// NewServer creates a new MCP server instance
+func NewServer() *Server {
+	return &Server{
+		state: game.NewGameState(),
+	}
+}
+
+// Tool represents an MCP tool definition
+type Tool struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	InputSchema interface{} `json:"inputSchema"`
+}
+
+// ToolResult represents the result of a tool call
+type ToolResult struct {
+	Content []ContentBlock `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
+}
+
+// ContentBlock represents a content block in the result
+type ContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// ListTools returns all available MCP tools
+func (s *Server) ListTools() []Tool {
+	return []Tool{
+		{
+			Name:        "new_game",
+			Description: "Start a new game with a character",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Name of your character",
+					},
+				},
+				"required": []string{"character_name"},
+			},
+		},
+		{
+			Name:        "look",
+			Description: "Look around the current room to see exits, monsters, items, and traps",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "move",
+			Description: "Move in a direction (north, south, east, west)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"direction": map[string]interface{}{
+						"type":        "string",
+						"description": "Direction to move (north, south, east, west)",
+						"enum":        []string{"north", "south", "east", "west"},
+					},
+				},
+				"required": []string{"direction"},
+			},
+		},
+		{
+			Name:        "attack",
+			Description: "Attack a monster in the current room",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"target_id": map[string]interface{}{
+						"type":        "string",
+						"description": "ID of the monster to attack",
+					},
+				},
+				"required": []string{"target_id"},
+			},
+		},
+		{
+			Name:        "take",
+			Description: "Pick up an item from the current room",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"item_id": map[string]interface{}{
+						"type":        "string",
+						"description": "ID of the item to pick up",
+					},
+				},
+				"required": []string{"item_id"},
+			},
+		},
+		{
+			Name:        "use",
+			Description: "Use an item from inventory",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"item_id": map[string]interface{}{
+						"type":        "string",
+						"description": "ID of the item to use",
+					},
+				},
+				"required": []string{"item_id"},
+			},
+		},
+		{
+			Name:        "inventory",
+			Description: "View current inventory",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "stats",
+			Description: "View character stats",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+	}
+}
+
+// CallTool executes an MCP tool
+func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolResult, error) {
+	switch name {
+	case "new_game":
+		charName, ok := arguments["character_name"].(string)
+		if !ok || charName == "" {
+			charName = "Hero"
+		}
+		return s.handleNewGame(charName)
+	case "look":
+		return s.handleLook()
+	case "move":
+		direction, ok := arguments["direction"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid direction")
+		}
+		return s.handleMove(direction)
+	case "attack":
+		targetID, ok := arguments["target_id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid target_id")
+		}
+		return s.handleAttack(targetID)
+	case "take":
+		itemID, ok := arguments["item_id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid item_id")
+		}
+		return s.handleTake(itemID)
+	case "use":
+		itemID, ok := arguments["item_id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid item_id")
+		}
+		return s.handleUse(itemID)
+	case "inventory":
+		return s.handleInventory()
+	case "stats":
+		return s.handleStats()
+	default:
+		return nil, fmt.Errorf("unknown tool: %s", name)
+	}
+}
+
+// handleNewGame starts a new game
+func (s *Server) handleNewGame(characterName string) (*ToolResult, error) {
+	// Reset game state
+	s.state = game.NewGameState()
+
+	// Create character
+	character := game.NewCharacter(characterName)
+	s.state.Character = character
+
+	// Generate dungeon
+	seed := time.Now().UnixNano()
+	gen := generator.NewDungeonGenerator(seed)
+	dungeon, rooms, connections, err := gen.GenerateDungeon(1) // Depth 1 for MVP
+	if err != nil {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Failed to generate dungeon: %v", err)}},
+			IsError: true,
+		}, nil
+	}
+
+	s.state.Dungeon = dungeon
+
+	// Add rooms and connections
+	for _, room := range rooms {
+		s.state.AddRoom(room)
+	}
+	for _, conn := range connections {
+		s.state.AddConnection(conn)
+	}
+
+	// Find entrance and set character's starting position
+	for _, room := range rooms {
+		if room.IsEntrance {
+			character.CurrentRoomID = room.ID
+			break
+		}
+	}
+
+	// Populate rooms with monsters and items
+	for i, room := range rooms {
+		difficulty := i // Difficulty increases with distance from entrance
+		monsters, items, traps := gen.PopulateRoom(room, difficulty)
+		for _, m := range monsters {
+			s.state.AddMonster(m)
+		}
+		for _, item := range items {
+			s.state.AddItem(item)
+		}
+		for _, trap := range traps {
+			s.state.AddTrap(trap)
+		}
+	}
+
+	// Build response
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== NEW GAME STARTED ===\n\n"))
+	sb.WriteString(fmt.Sprintf("Welcome, %s!\n\n", character.Name))
+	sb.WriteString(fmt.Sprintf("You find yourself at the entrance of a dark dungeon.\n"))
+	sb.WriteString(fmt.Sprintf("Your goal: reach the exit on the other side.\n"))
+	sb.WriteString(fmt.Sprintf("Beware of the monsters that lurk within!\n\n"))
+	sb.WriteString(fmt.Sprintf("Stats: HP %d/%d | STR %d | DEX %d\n\n",
+		character.HP, character.MaxHP, character.Strength, character.Dexterity))
+	sb.WriteString("Use 'look' to see your surroundings.")
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// handleLook shows the current room
+func (s *Server) handleLook() (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	if s.state.GameOver {
+		if s.state.Victory {
+			return &ToolResult{
+				Content: []ContentBlock{{Type: "text", Text: "You have escaped the dungeon! Victory! Use 'new_game' to play again."}},
+			}, nil
+		}
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "You are dead. Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	room := s.state.GetCurrentRoom()
+	if room == nil {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Error: Current room not found."}},
+			IsError: true,
+		}, nil
+	}
+
+	var sb strings.Builder
+
+	// Room header
+	sb.WriteString(fmt.Sprintf("=== %s ===\n\n", room.Name))
+	sb.WriteString(fmt.Sprintf("%s\n\n", room.Description))
+
+	// Special room markers
+	if room.IsEntrance {
+		sb.WriteString("[This is the dungeon entrance]\n\n")
+	}
+	if room.IsExit {
+		sb.WriteString("[This is the dungeon exit - reach here to win!]\n\n")
+	}
+
+	// Exits
+	exits := s.state.GetRoomExits(room.ID)
+	if len(exits) > 0 {
+		exitDirs := make([]string, 0, len(exits))
+		for dir := range exits {
+			exitDirs = append(exitDirs, dir)
+		}
+		sb.WriteString(fmt.Sprintf("Exits: %s\n\n", strings.Join(exitDirs, ", ")))
+	} else {
+		sb.WriteString("Exits: none\n\n")
+	}
+
+	// Monsters
+	monsters := s.state.GetRoomMonsters(room.ID)
+	if len(monsters) > 0 {
+		sb.WriteString("Monsters:\n")
+		for _, m := range monsters {
+			sb.WriteString(fmt.Sprintf("  - %s (HP: %d/%d) [ID: %s]\n", m.Name, m.HP, m.MaxHP, m.ID))
+			sb.WriteString(fmt.Sprintf("    %s\n", m.Description))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Items on the floor
+	items := s.state.GetRoomItems(room.ID)
+	if len(items) > 0 {
+		sb.WriteString("Items:\n")
+		for _, item := range items {
+			sb.WriteString(fmt.Sprintf("  - %s [ID: %s]\n", item.Name, item.ID))
+			sb.WriteString(fmt.Sprintf("    %s\n", item.Description))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Warning if monsters block exit
+	if len(monsters) > 0 {
+		sb.WriteString("⚔️  Monsters block your path! Defeat them to proceed.\n")
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// handleMove moves the character
+func (s *Server) handleMove(direction string) (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	if s.state.GameOver {
+		if s.state.Victory {
+			return &ToolResult{
+				Content: []ContentBlock{{Type: "text", Text: "You have already won! Use 'new_game' to play again."}},
+			}, nil
+		}
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "You are dead. Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	err := s.state.MoveCharacter(direction)
+	if err != nil {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: err.Error()}},
+		}, nil
+	}
+
+	// Check for victory
+	if s.state.Victory {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "You step through the exit and escape the dungeon!\n\n🏆 VICTORY! 🏆\n\nCongratulations, brave adventurer! Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	// Show the new room
+	newRoom := s.state.GetCurrentRoom()
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("You move %s...\n\n", direction))
+	sb.WriteString(fmt.Sprintf("=== %s ===\n\n", newRoom.Name))
+	sb.WriteString(fmt.Sprintf("%s\n", newRoom.Description))
+
+	// Check for monsters
+	monsters := s.state.GetRoomMonsters(newRoom.ID)
+	if len(monsters) > 0 {
+		sb.WriteString("\n⚔️  Danger! Monsters ahead!\n")
+		for _, m := range monsters {
+			sb.WriteString(fmt.Sprintf("  - %s (HP: %d/%d) [ID: %s]\n", m.Name, m.HP, m.MaxHP, m.ID))
+		}
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// handleAttack attacks a monster
+func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	if s.state.GameOver {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	// Find the monster
+	monster, ok := s.state.Monsters[targetID]
+	if !ok {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Monster not found. Use 'look' to see available targets."}},
+		}, nil
+	}
+
+	// Check monster is in current room
+	if monster.RoomID != s.state.Character.CurrentRoomID {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "That monster is not in this room."}},
+		}, nil
+	}
+
+	// Check monster is alive
+	if !monster.IsAlive {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "That monster is already dead."}},
+		}, nil
+	}
+
+	// Execute combat turn
+	result, _ := game.ExecuteCombatTurn(s.state.Character, monster, "attack")
+
+	var sb strings.Builder
+	sb.WriteString("=== COMBAT ===\n\n")
+	sb.WriteString(result.Message)
+	sb.WriteString("\n")
+
+	// Check for player death
+	if result.AttackerDied {
+		s.state.KillCharacter()
+		sb.WriteString("\n💀 YOU HAVE DIED 💀\n\nUse 'new_game' to try again.")
+	} else if result.DefenderDied {
+		s.state.KillMonster(targetID)
+		sb.WriteString(fmt.Sprintf("\n✨ The %s has been defeated!\n", monster.Name))
+
+		// Check if room is clear
+		if !s.state.HasMonstersInRoom(s.state.Character.CurrentRoomID) {
+			sb.WriteString("\nThe room is now clear. You may proceed.")
+		}
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// handleTake picks up an item
+func (s *Server) handleTake(itemID string) (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	if s.state.GameOver {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	item, ok := s.state.Items[itemID]
+	if !ok {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Item not found. Use 'look' to see available items."}},
+		}, nil
+	}
+
+	err := s.state.TakeItem(itemID)
+	if err != nil {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: err.Error()}},
+		}, nil
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("You pick up the %s.", item.Name)}},
+	}, nil
+}
+
+// handleUse uses an item from inventory
+func (s *Server) handleUse(itemID string) (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	if s.state.GameOver {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
+		}, nil
+	}
+
+	message, err := s.state.UseItem(itemID)
+	if err != nil {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: err.Error()}},
+		}, nil
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: message}},
+	}, nil
+}
+
+// handleInventory shows the character's inventory
+func (s *Server) handleInventory() (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	items := s.state.GetInventory()
+
+	var sb strings.Builder
+	sb.WriteString("=== INVENTORY ===\n\n")
+
+	if len(items) == 0 {
+		sb.WriteString("Your inventory is empty.\n")
+	} else {
+		for _, item := range items {
+			sb.WriteString(fmt.Sprintf("- %s [ID: %s]\n", item.Name, item.ID))
+			sb.WriteString(fmt.Sprintf("  %s\n", item.Description))
+			if item.Type == "consumable" && item.Healing > 0 {
+				sb.WriteString(fmt.Sprintf("  (Heals %d HP)\n", item.Healing))
+			}
+			if item.Type == "weapon" && item.Damage > 0 {
+				sb.WriteString(fmt.Sprintf("  (Damage +%d)\n", item.Damage))
+			}
+		}
+	}
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// handleStats shows character stats
+func (s *Server) handleStats() (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	char := s.state.Character
+
+	var sb strings.Builder
+	sb.WriteString("=== CHARACTER STATS ===\n\n")
+	sb.WriteString(fmt.Sprintf("Name: %s\n", char.Name))
+	sb.WriteString(fmt.Sprintf("HP: %d/%d\n", char.HP, char.MaxHP))
+	sb.WriteString(fmt.Sprintf("Strength: %d\n", char.Strength))
+	sb.WriteString(fmt.Sprintf("Dexterity: %d\n", char.Dexterity))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", func() string {
+		if !char.IsAlive {
+			return "Dead"
+		}
+		if char.HP <= char.MaxHP/4 {
+			return "Critical"
+		}
+		if char.HP <= char.MaxHP/2 {
+			return "Wounded"
+		}
+		return "Healthy"
+	}()))
+
+	if s.state.Victory {
+		sb.WriteString("\n🏆 VICTORIOUS 🏆\n")
+	}
+
+	// Also show current room summary
+	room := s.state.GetCurrentRoom()
+	if room != nil {
+		sb.WriteString(fmt.Sprintf("\nLocation: %s\n", room.Name))
+	}
+
+	// Show inventory count
+	inv := s.state.GetInventory()
+	sb.WriteString(fmt.Sprintf("Inventory: %d items\n", len(inv)))
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// Helper to marshal to JSON for debugging
+func toJSON(v interface{}) string {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return string(b)
+}
