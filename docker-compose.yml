@@ -1,0 +1,15 @@
+version: '3'
+services:
+  dungeon-crawler:
+    image: lehmann314159/dungeon-crawler:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DB_PATH=/data/dungeon-crawler.db
+    volumes:
+      - dungeon-data:/data
+    restart: unless-stopped
+
+volumes:
+  dungeon-data:
