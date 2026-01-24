@@ -139,6 +139,14 @@ func (s *Server) ListTools() []Tool {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			Name:        "map",
+			Description: "View the dungeon map showing explored areas",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
 	}
 }
 
@@ -181,6 +189,8 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 		return s.handleInventory()
 	case "stats":
 		return s.handleStats()
+	case "map":
+		return s.handleMap()
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -220,13 +230,14 @@ func (s *Server) handleNewGame(characterName string) (*ToolResult, error) {
 	for _, room := range rooms {
 		if room.IsEntrance {
 			character.CurrentRoomID = room.ID
+			s.state.MarkRoomVisited(room.ID)
 			break
 		}
 	}
 
 	// Populate rooms with monsters and items
-	for i, room := range rooms {
-		difficulty := i // Difficulty increases with distance from entrance
+	for _, room := range rooms {
+		difficulty := room.X + room.Y // Manhattan distance from entrance
 		monsters, items, traps := gen.PopulateRoom(room, difficulty)
 		for _, m := range monsters {
 			s.state.AddMonster(m)
@@ -594,6 +605,21 @@ func (s *Server) handleStats() (*ToolResult, error) {
 
 	return &ToolResult{
 		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+	}, nil
+}
+
+// handleMap shows the dungeon map
+func (s *Server) handleMap() (*ToolResult, error) {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
+		}, nil
+	}
+
+	mapStr := s.state.RenderMap(5) // 5x5 grid
+
+	return &ToolResult{
+		Content: []ContentBlock{{Type: "text", Text: mapStr}},
 	}, nil
 }
 

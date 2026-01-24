@@ -8,6 +8,8 @@ import (
 	"github.com/yourusername/dungeon-crawler/internal/game"
 )
 
+const GridSize = 5
+
 // DungeonGenerator handles procedural dungeon generation
 type DungeonGenerator struct {
 	seed   int64
@@ -29,6 +31,17 @@ func NewDungeonGenerator(seed int64) *DungeonGenerator {
 	}
 }
 
+// coord represents a position in the grid
+type coord struct {
+	x, y int
+}
+
+// edge represents a connection between two rooms
+type edge struct {
+	from, to  coord
+	direction string
+}
+
 // GenerateDungeon creates a new procedural dungeon
 func (dg *DungeonGenerator) GenerateDungeon(depth int) (*game.Dungeon, []*game.Room, []*game.RoomConnection, error) {
 	dungeon := &game.Dungeon{
@@ -37,69 +50,243 @@ func (dg *DungeonGenerator) GenerateDungeon(depth int) (*game.Dungeon, []*game.R
 		Depth: depth,
 	}
 
-	// TODO: Implement actual dungeon generation
-	// For now, create a simple linear dungeon
-	rooms := dg.generateLinearDungeon(dungeon.ID, 5+depth)
-	connections := dg.connectRooms(rooms)
+	// Generate 5x5 grid
+	rooms, roomGrid := dg.generateGrid(dungeon.ID)
+
+	// Generate spanning tree for connectivity, then add extra doors
+	connections := dg.generateConnections(roomGrid)
 
 	return dungeon, rooms, connections, nil
 }
 
-// generateLinearDungeon creates a simple linear sequence of rooms
-func (dg *DungeonGenerator) generateLinearDungeon(dungeonID string, numRooms int) []*game.Room {
-	rooms := make([]*game.Room, numRooms)
+// generateGrid creates a 5x5 grid of rooms
+func (dg *DungeonGenerator) generateGrid(dungeonID string) ([]*game.Room, map[coord]*game.Room) {
+	rooms := make([]*game.Room, 0, GridSize*GridSize)
+	roomGrid := make(map[coord]*game.Room)
 
-	for i := 0; i < numRooms; i++ {
-		room := &game.Room{
-			ID:          generateID(),
-			DungeonID:   dungeonID,
-			Name:        dg.generateRoomName(),
-			Description: "A dark room awaits description", // TODO: Use LLM for flavor
-			IsEntrance:  i == 0,
-			IsExit:      i == numRooms-1,
-			X:           i,
-			Y:           0,
+	for y := 0; y < GridSize; y++ {
+		for x := 0; x < GridSize; x++ {
+			room := &game.Room{
+				ID:          generateID(),
+				DungeonID:   dungeonID,
+				Name:        dg.generateRoomName(),
+				Description: dg.generateRoomDescription(x, y),
+				IsEntrance:  x == 0 && y == 0,
+				IsExit:      x == GridSize-1 && y == GridSize-1,
+				X:           x,
+				Y:           y,
+			}
+			rooms = append(rooms, room)
+			roomGrid[coord{x, y}] = room
 		}
-		rooms[i] = room
 	}
 
-	return rooms
+	return rooms, roomGrid
 }
 
-// connectRooms creates connections between adjacent rooms
-func (dg *DungeonGenerator) connectRooms(rooms []*game.Room) []*game.RoomConnection {
+// generateConnections creates room connections using spanning tree + extra doors
+func (dg *DungeonGenerator) generateConnections(roomGrid map[coord]*game.Room) []*game.RoomConnection {
+	// Track which edges exist (bidirectional)
+	edges := make(map[coord]map[string]bool) // coord -> direction -> exists
+	for c := range roomGrid {
+		edges[c] = make(map[string]bool)
+	}
+
+	// Step 1: Generate spanning tree using randomized Prim's algorithm
+	visited := make(map[coord]bool)
+	frontier := make([]edge, 0)
+
+	// Start from entrance (0,0)
+	start := coord{0, 0}
+	visited[start] = true
+	dg.addFrontierEdges(&frontier, start, visited)
+
+	for len(frontier) > 0 {
+		// Pick random edge from frontier
+		idx := dg.random.Intn(len(frontier))
+		e := frontier[idx]
+		// Remove from frontier
+		frontier = append(frontier[:idx], frontier[idx+1:]...)
+
+		if visited[e.to] {
+			continue
+		}
+
+		// Add this edge to the tree
+		visited[e.to] = true
+		edges[e.from][e.direction] = true
+		edges[e.to][oppositeDir(e.direction)] = true
+
+		// Add new frontier edges
+		dg.addFrontierEdges(&frontier, e.to, visited)
+	}
+
+	// Step 2: Count doors per room and add extras to hit distribution
+	// Target: 25% 1-door, 50% 2-door, 25% 3-door
+	doorCounts := make(map[coord]int)
+	for c := range roomGrid {
+		doorCounts[c] = len(edges[c])
+	}
+
+	// Get all possible edges that don't exist yet
+	possibleEdges := dg.getPossibleEdges(roomGrid, edges)
+	dg.shuffleEdges(possibleEdges)
+
+	// Add edges to reach target distribution
+	for _, e := range possibleEdges {
+		fromDoors := doorCounts[e.from]
+		toDoors := doorCounts[e.to]
+
+		// Don't exceed 3 doors per room
+		if fromDoors >= 3 || toDoors >= 3 {
+			continue
+		}
+
+		// Decide if we should add this edge based on distribution goals
+		// Rooms with 1 door should sometimes get more, rooms with 2 might get a 3rd
+		shouldAdd := false
+		if fromDoors == 1 && dg.random.Float32() < 0.75 {
+			shouldAdd = true // 1-door rooms often need more
+		} else if fromDoors == 2 && dg.random.Float32() < 0.25 {
+			shouldAdd = true // Some 2-door rooms become 3-door
+		}
+
+		if shouldAdd {
+			edges[e.from][e.direction] = true
+			edges[e.to][oppositeDir(e.direction)] = true
+			doorCounts[e.from]++
+			doorCounts[e.to]++
+		}
+	}
+
+	// Step 3: Convert edges map to RoomConnection slice
 	connections := make([]*game.RoomConnection, 0)
-
-	for i := 0; i < len(rooms)-1; i++ {
-		// Forward connection
-		connections = append(connections, &game.RoomConnection{
-			ID:              generateID(),
-			RoomID:          rooms[i].ID,
-			Direction:       "east",
-			ConnectedRoomID: rooms[i+1].ID,
-		})
-
-		// Backward connection
-		connections = append(connections, &game.RoomConnection{
-			ID:              generateID(),
-			RoomID:          rooms[i+1].ID,
-			Direction:       "west",
-			ConnectedRoomID: rooms[i].ID,
-		})
+	for c, dirs := range edges {
+		room := roomGrid[c]
+		for dir := range dirs {
+			neighbor := getNeighbor(c, dir)
+			neighborRoom := roomGrid[neighbor]
+			if neighborRoom != nil {
+				connections = append(connections, &game.RoomConnection{
+					ID:              generateID(),
+					RoomID:          room.ID,
+					Direction:       dir,
+					ConnectedRoomID: neighborRoom.ID,
+				})
+			}
+		}
 	}
 
 	return connections
 }
 
+// addFrontierEdges adds all edges from a coord to unvisited neighbors
+func (dg *DungeonGenerator) addFrontierEdges(frontier *[]edge, c coord, visited map[coord]bool) {
+	directions := []string{"north", "south", "east", "west"}
+	for _, dir := range directions {
+		neighbor := getNeighbor(c, dir)
+		if neighbor.x >= 0 && neighbor.x < GridSize && neighbor.y >= 0 && neighbor.y < GridSize {
+			if !visited[neighbor] {
+				*frontier = append(*frontier, edge{from: c, to: neighbor, direction: dir})
+			}
+		}
+	}
+}
+
+// getPossibleEdges returns all edges that could be added but don't exist
+func (dg *DungeonGenerator) getPossibleEdges(roomGrid map[coord]*game.Room, edges map[coord]map[string]bool) []edge {
+	possible := make([]edge, 0)
+	directions := []string{"north", "east"} // Only check two directions to avoid duplicates
+
+	for c := range roomGrid {
+		for _, dir := range directions {
+			neighbor := getNeighbor(c, dir)
+			if roomGrid[neighbor] != nil && !edges[c][dir] {
+				possible = append(possible, edge{from: c, to: neighbor, direction: dir})
+			}
+		}
+	}
+	return possible
+}
+
+// shuffleEdges randomizes edge order
+func (dg *DungeonGenerator) shuffleEdges(edges []edge) {
+	for i := len(edges) - 1; i > 0; i-- {
+		j := dg.random.Intn(i + 1)
+		edges[i], edges[j] = edges[j], edges[i]
+	}
+}
+
+// getNeighbor returns the coord in the given direction
+func getNeighbor(c coord, dir string) coord {
+	switch dir {
+	case "north":
+		return coord{c.x, c.y + 1}
+	case "south":
+		return coord{c.x, c.y - 1}
+	case "east":
+		return coord{c.x + 1, c.y}
+	case "west":
+		return coord{c.x - 1, c.y}
+	}
+	return c
+}
+
+// oppositeDir returns the opposite direction
+func oppositeDir(dir string) string {
+	switch dir {
+	case "north":
+		return "south"
+	case "south":
+		return "north"
+	case "east":
+		return "west"
+	case "west":
+		return "east"
+	}
+	return ""
+}
+
 // generateRoomName creates a random room name
 func (dg *DungeonGenerator) generateRoomName() string {
-	adjectives := []string{"Dark", "Dusty", "Ancient", "Forgotten", "Cursed", "Silent", "Echoing"}
-	nouns := []string{"Chamber", "Hall", "Corridor", "Vault", "Crypt", "Passage", "Alcove"}
+	adjectives := []string{"Dark", "Dusty", "Ancient", "Forgotten", "Cursed", "Silent", "Echoing", "Gloomy", "Damp", "Musty"}
+	nouns := []string{"Chamber", "Hall", "Corridor", "Vault", "Crypt", "Passage", "Alcove", "Sanctum", "Den", "Lair"}
 
 	adj := adjectives[dg.random.Intn(len(adjectives))]
 	noun := nouns[dg.random.Intn(len(nouns))]
 
 	return fmt.Sprintf("%s %s", adj, noun)
+}
+
+// generateRoomDescription creates a description based on position
+func (dg *DungeonGenerator) generateRoomDescription(x, y int) string {
+	distance := x + y // Manhattan distance from entrance
+
+	if x == 0 && y == 0 {
+		return "The entrance to the dungeon. Faint light filters in from behind you."
+	}
+	if x == GridSize-1 && y == GridSize-1 {
+		return "A grand chamber with an ornate door leading to freedom!"
+	}
+
+	descriptions := []string{
+		"Cold stone walls surround you. Water drips somewhere in the darkness.",
+		"Cobwebs hang from the ceiling. The air smells of decay.",
+		"Torches flicker weakly on the walls, casting dancing shadows.",
+		"Bones are scattered across the floor. Something died here.",
+		"Strange runes are carved into the walls, pulsing with faint light.",
+		"The ceiling is low here, forcing you to crouch slightly.",
+		"Claw marks score the stone walls. Something large passed through.",
+		"A cold draft blows through, carrying whispers from deeper within.",
+	}
+
+	// Use distance to weight toward scarier descriptions
+	idx := dg.random.Intn(len(descriptions))
+	if distance > 4 && dg.random.Float32() < 0.5 {
+		idx = dg.random.Intn(3) + 5 // Prefer scarier ones
+	}
+
+	return descriptions[idx]
 }
 
 // MonsterTemplate defines a monster type
@@ -125,6 +312,7 @@ var monsterTemplates = []MonsterTemplate{
 	{Name: "Goblin", Description: "A small, green-skinned creature with a wicked grin.", BaseHP: 10, BaseDamage: 4, MinDiff: 1},
 	{Name: "Skeleton", Description: "The animated bones of a long-dead warrior.", BaseHP: 15, BaseDamage: 5, MinDiff: 2},
 	{Name: "Orc", Description: "A hulking brute with tusks and a massive club.", BaseHP: 25, BaseDamage: 8, MinDiff: 3},
+	{Name: "Wraith", Description: "A shadowy figure that chills you to the bone.", BaseHP: 20, BaseDamage: 7, MinDiff: 4},
 }
 
 var itemTemplates = []ItemTemplate{
@@ -160,8 +348,7 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 		return monsters, items, traps
 	}
 
-	// Spawn monsters based on difficulty
-	// Higher difficulty = more/stronger monsters
+	// Spawn monsters based on difficulty (Manhattan distance from entrance)
 	eligibleMonsters := make([]MonsterTemplate, 0)
 	for _, mt := range monsterTemplates {
 		if mt.MinDiff <= difficulty {
@@ -169,20 +356,21 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 		}
 	}
 
-	if len(eligibleMonsters) > 0 {
+	// 70% chance of monsters in non-entrance/exit rooms
+	if len(eligibleMonsters) > 0 && dg.random.Float32() < 0.7 {
 		// Spawn 1-2 monsters
 		numMonsters := 1
-		if difficulty >= 2 && dg.random.Float32() < 0.3 {
+		if difficulty >= 3 && dg.random.Float32() < 0.4 {
 			numMonsters = 2
 		}
 
 		for i := 0; i < numMonsters; i++ {
-			// Pick a random eligible monster, weighted toward harder ones at higher difficulty
+			// Pick a random eligible monster
 			idx := dg.random.Intn(len(eligibleMonsters))
 			template := eligibleMonsters[idx]
 
 			// Scale HP and damage with difficulty
-			scaleFactor := 1.0 + float64(difficulty)*0.1
+			scaleFactor := 1.0 + float64(difficulty)*0.15
 			monster := &game.Monster{
 				ID:          generateID(),
 				Name:        template.Name,
@@ -197,10 +385,10 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 		}
 	}
 
-	// Chance to spawn an item (30% base + 10% per difficulty)
-	itemChance := 0.3 + float64(difficulty)*0.1
-	if itemChance > 0.7 {
-		itemChance = 0.7
+	// Chance to spawn an item (25% base + 5% per difficulty)
+	itemChance := 0.25 + float64(difficulty)*0.05
+	if itemChance > 0.5 {
+		itemChance = 0.5
 	}
 
 	if dg.random.Float64() < itemChance {
@@ -219,4 +407,9 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 	}
 
 	return monsters, items, traps
+}
+
+// GetRoomDifficulty calculates difficulty based on Manhattan distance from entrance
+func GetRoomDifficulty(room *game.Room) int {
+	return room.X + room.Y
 }

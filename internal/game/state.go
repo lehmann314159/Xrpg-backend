@@ -2,30 +2,35 @@ package game
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
 // GameState holds all in-memory game state
 type GameState struct {
-	Character   *Character
-	Dungeon     *Dungeon
-	Rooms       map[string]*Room       // keyed by room ID
-	Connections map[string][]*RoomConnection // keyed by room ID
-	Monsters    map[string]*Monster    // keyed by monster ID
-	Items       map[string]*Item       // keyed by item ID
-	Traps       map[string]*Trap       // keyed by trap ID
-	GameOver    bool
-	Victory     bool
+	Character    *Character
+	Dungeon      *Dungeon
+	Rooms        map[string]*Room             // keyed by room ID
+	RoomsByCoord map[string]*Room             // keyed by "x,y"
+	Connections  map[string][]*RoomConnection // keyed by room ID
+	Monsters     map[string]*Monster          // keyed by monster ID
+	Items        map[string]*Item             // keyed by item ID
+	Traps        map[string]*Trap             // keyed by trap ID
+	VisitedRooms map[string]bool              // keyed by room ID
+	GameOver     bool
+	Victory      bool
 }
 
 // NewGameState creates an empty game state
 func NewGameState() *GameState {
 	return &GameState{
-		Rooms:       make(map[string]*Room),
-		Connections: make(map[string][]*RoomConnection),
-		Monsters:    make(map[string]*Monster),
-		Items:       make(map[string]*Item),
-		Traps:       make(map[string]*Trap),
+		Rooms:        make(map[string]*Room),
+		RoomsByCoord: make(map[string]*Room),
+		Connections:  make(map[string][]*RoomConnection),
+		Monsters:     make(map[string]*Monster),
+		Items:        make(map[string]*Item),
+		Traps:        make(map[string]*Trap),
+		VisitedRooms: make(map[string]bool),
 	}
 }
 
@@ -128,6 +133,7 @@ func (gs *GameState) MoveCharacter(direction string) error {
 
 	// Move the character
 	gs.Character.CurrentRoomID = newRoomID
+	gs.VisitedRooms[newRoomID] = true
 
 	// Check for victory
 	newRoom := gs.Rooms[newRoomID]
@@ -235,6 +241,7 @@ func (gs *GameState) KillCharacter() {
 // AddRoom adds a room to the game state
 func (gs *GameState) AddRoom(room *Room) {
 	gs.Rooms[room.ID] = room
+	gs.RoomsByCoord[fmt.Sprintf("%d,%d", room.X, room.Y)] = room
 }
 
 // AddConnection adds a room connection to the game state
@@ -255,4 +262,124 @@ func (gs *GameState) AddItem(item *Item) {
 // AddTrap adds a trap to the game state
 func (gs *GameState) AddTrap(trap *Trap) {
 	gs.Traps[trap.ID] = trap
+}
+
+// MarkRoomVisited marks a room as visited
+func (gs *GameState) MarkRoomVisited(roomID string) {
+	gs.VisitedRooms[roomID] = true
+}
+
+// IsRoomVisited returns true if a room has been visited
+func (gs *GameState) IsRoomVisited(roomID string) bool {
+	return gs.VisitedRooms[roomID]
+}
+
+// GetRoomAt returns the room at the given coordinates
+func (gs *GameState) GetRoomAt(x, y int) *Room {
+	return gs.RoomsByCoord[fmt.Sprintf("%d,%d", x, y)]
+}
+
+// IsRoomAdjacent returns true if a room is adjacent to a visited room
+func (gs *GameState) IsRoomAdjacent(roomID string) bool {
+	room := gs.Rooms[roomID]
+	if room == nil {
+		return false
+	}
+
+	// Check all 4 adjacent positions
+	adjacentCoords := []struct{ x, y int }{
+		{room.X - 1, room.Y},
+		{room.X + 1, room.Y},
+		{room.X, room.Y - 1},
+		{room.X, room.Y + 1},
+	}
+
+	for _, coord := range adjacentCoords {
+		adjRoom := gs.GetRoomAt(coord.x, coord.y)
+		if adjRoom != nil && gs.IsRoomVisited(adjRoom.ID) {
+			// Check if there's actually a connection between them
+			exits := gs.GetRoomExits(adjRoom.ID)
+			for _, connectedID := range exits {
+				if connectedID == roomID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// RenderMap generates a box-drawing map of the dungeon
+func (gs *GameState) RenderMap(gridSize int) string {
+	currentRoom := gs.GetCurrentRoom()
+	if currentRoom == nil {
+		return "No map available"
+	}
+
+	var sb strings.Builder
+
+	// Top border
+	sb.WriteString("┌")
+	for x := 0; x < gridSize; x++ {
+		sb.WriteString("───")
+		if x < gridSize-1 {
+			sb.WriteString("┬")
+		}
+	}
+	sb.WriteString("┐\n")
+
+	// Rows (from top to bottom, so y goes from gridSize-1 to 0)
+	for y := gridSize - 1; y >= 0; y-- {
+		// Room row
+		sb.WriteString("│")
+		for x := 0; x < gridSize; x++ {
+			room := gs.GetRoomAt(x, y)
+			cell := "   " // Unknown
+
+			if room != nil {
+				if room.ID == currentRoom.ID {
+					cell = " @ " // Current location
+				} else if room.IsExit && gs.IsRoomVisited(room.ID) {
+					cell = " E " // Exit (discovered)
+				} else if gs.IsRoomVisited(room.ID) {
+					cell = " # " // Explored
+				} else if gs.IsRoomAdjacent(room.ID) {
+					cell = " ? " // Adjacent/accessible
+				}
+			}
+
+			sb.WriteString(cell)
+			if x < gridSize-1 {
+				sb.WriteString("│")
+			}
+		}
+		sb.WriteString("│\n")
+
+		// Row separator or bottom border
+		if y > 0 {
+			sb.WriteString("├")
+			for x := 0; x < gridSize; x++ {
+				sb.WriteString("───")
+				if x < gridSize-1 {
+					sb.WriteString("┼")
+				}
+			}
+			sb.WriteString("┤\n")
+		}
+	}
+
+	// Bottom border
+	sb.WriteString("└")
+	for x := 0; x < gridSize; x++ {
+		sb.WriteString("───")
+		if x < gridSize-1 {
+			sb.WriteString("┴")
+		}
+	}
+	sb.WriteString("┘\n")
+
+	// Legend
+	sb.WriteString("\n@ = You  # = Explored  ? = Adjacent  E = Exit")
+
+	return sb.String()
 }
