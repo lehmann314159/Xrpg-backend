@@ -5,11 +5,45 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/yourusername/dungeon-crawler/internal/db"
 	"github.com/yourusername/dungeon-crawler/internal/mcp"
 )
+
+// CORS middleware to allow requests from the React frontend
+func corsMiddleware(allowedOrigins []string) mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+
+			// Check if origin is allowed
+			allowed := false
+			for _, o := range allowedOrigins {
+				if o == "*" || o == origin {
+					allowed = true
+					break
+				}
+			}
+
+			if allowed {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+
+			// Handle preflight requests
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 type Server struct {
 	db        *db.DB
@@ -56,19 +90,37 @@ func main() {
 }
 
 func (s *Server) setupRoutes() {
+	// Configure allowed origins for CORS
+	allowedOriginsEnv := os.Getenv("CORS_ORIGINS")
+	var allowedOrigins []string
+	if allowedOriginsEnv != "" {
+		allowedOrigins = strings.Split(allowedOriginsEnv, ",")
+	} else {
+		// Default origins for development
+		allowedOrigins = []string{
+			"http://localhost:3000",
+			"http://localhost:5173",
+			"http://127.0.0.1:3000",
+			"http://127.0.0.1:5173",
+		}
+	}
+
+	// Apply CORS middleware
+	s.router.Use(corsMiddleware(allowedOrigins))
+
 	// Health check
-	s.router.HandleFunc("/health", s.handleHealth).Methods("GET")
+	s.router.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
 
 	// MCP endpoints
-	s.router.HandleFunc("/mcp/tools", s.handleListTools).Methods("GET")
-	s.router.HandleFunc("/mcp/call", s.handleCallTool).Methods("POST")
+	s.router.HandleFunc("/mcp/tools", s.handleListTools).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/mcp/call", s.handleCallTool).Methods("POST", "OPTIONS")
 
 	// REST API endpoints (for future web UI)
 	api := s.router.PathPrefix("/api/v1").Subrouter()
-	api.HandleFunc("/character", s.handleCreateCharacter).Methods("POST")
-	api.HandleFunc("/character/{id}", s.handleGetCharacter).Methods("GET")
-	api.HandleFunc("/dungeon", s.handleCreateDungeon).Methods("POST")
-	api.HandleFunc("/dungeon/{id}", s.handleGetDungeon).Methods("GET")
+	api.HandleFunc("/character", s.handleCreateCharacter).Methods("POST", "OPTIONS")
+	api.HandleFunc("/character/{id}", s.handleGetCharacter).Methods("GET", "OPTIONS")
+	api.HandleFunc("/dungeon", s.handleCreateDungeon).Methods("POST", "OPTIONS")
+	api.HandleFunc("/dungeon/{id}", s.handleGetDungeon).Methods("GET", "OPTIONS")
 
 	// Serve static files (future frontend)
 	// s.router.PathPrefix("/").Handler(http.FileServer(http.Dir("./static")))

@@ -31,14 +31,190 @@ type Tool struct {
 
 // ToolResult represents the result of a tool call
 type ToolResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content   []ContentBlock          `json:"content"`
+	IsError   bool                    `json:"isError,omitempty"`
+	GameState *game.GameStateSnapshot `json:"gameState,omitempty"`
 }
 
 // ContentBlock represents a content block in the result
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// buildGameStateSnapshot creates a snapshot of the current game state for the frontend
+func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
+	if !s.state.IsInitialized() {
+		return nil
+	}
+
+	snapshot := &game.GameStateSnapshot{
+		GameOver: s.state.GameOver,
+		Victory:  s.state.Victory,
+	}
+
+	// Character view
+	if s.state.Character != nil {
+		char := s.state.Character
+		status := "Healthy"
+		if !char.IsAlive {
+			status = "Dead"
+		} else if char.HP <= char.MaxHP/4 {
+			status = "Critical"
+		} else if char.HP <= char.MaxHP/2 {
+			status = "Wounded"
+		}
+
+		snapshot.Character = &game.CharacterView{
+			ID:        char.ID,
+			Name:      char.Name,
+			HP:        char.HP,
+			MaxHP:     char.MaxHP,
+			Strength:  char.Strength,
+			Dexterity: char.Dexterity,
+			IsAlive:   char.IsAlive,
+			Status:    status,
+		}
+	}
+
+	// Current room view
+	room := s.state.GetCurrentRoom()
+	if room != nil {
+		exits := s.state.GetRoomExits(room.ID)
+		exitDirs := make([]string, 0, len(exits))
+		for dir := range exits {
+			exitDirs = append(exitDirs, dir)
+		}
+
+		snapshot.CurrentRoom = &game.RoomView{
+			ID:          room.ID,
+			Name:        room.Name,
+			Description: room.Description,
+			IsEntrance:  room.IsEntrance,
+			IsExit:      room.IsExit,
+			X:           room.X,
+			Y:           room.Y,
+			Exits:       exitDirs,
+		}
+
+		// Monsters in current room
+		monsters := s.state.GetRoomMonsters(room.ID)
+		snapshot.Monsters = make([]*game.MonsterView, 0, len(monsters))
+		for _, m := range monsters {
+			snapshot.Monsters = append(snapshot.Monsters, &game.MonsterView{
+				ID:          m.ID,
+				Name:        m.Name,
+				Description: m.Description,
+				HP:          m.HP,
+				MaxHP:       m.MaxHP,
+				Damage:      m.Damage,
+			})
+		}
+
+		// Items in current room
+		roomItems := s.state.GetRoomItems(room.ID)
+		snapshot.RoomItems = make([]*game.ItemView, 0, len(roomItems))
+		for _, item := range roomItems {
+			snapshot.RoomItems = append(snapshot.RoomItems, &game.ItemView{
+				ID:          item.ID,
+				Name:        item.Name,
+				Description: item.Description,
+				Type:        item.Type,
+				Damage:      item.Damage,
+				Armor:       item.Armor,
+				Healing:     item.Healing,
+				IsEquipped:  item.IsEquipped,
+			})
+		}
+	}
+
+	// Inventory
+	inventory := s.state.GetInventory()
+	snapshot.Inventory = make([]*game.ItemView, 0, len(inventory))
+	for _, item := range inventory {
+		snapshot.Inventory = append(snapshot.Inventory, &game.ItemView{
+			ID:          item.ID,
+			Name:        item.Name,
+			Description: item.Description,
+			Type:        item.Type,
+			Damage:      item.Damage,
+			Armor:       item.Armor,
+			Healing:     item.Healing,
+			IsEquipped:  item.IsEquipped,
+		})
+	}
+
+	// Equipment
+	snapshot.Equipment = &game.EquipmentView{}
+	if s.state.Character != nil {
+		if s.state.Character.EquippedWeaponID != nil {
+			weapon := s.state.Items[*s.state.Character.EquippedWeaponID]
+			if weapon != nil {
+				snapshot.Equipment.Weapon = &game.ItemView{
+					ID:          weapon.ID,
+					Name:        weapon.Name,
+					Description: weapon.Description,
+					Type:        weapon.Type,
+					Damage:      weapon.Damage,
+					IsEquipped:  true,
+				}
+			}
+		}
+		if s.state.Character.EquippedArmorID != nil {
+			armor := s.state.Items[*s.state.Character.EquippedArmorID]
+			if armor != nil {
+				snapshot.Equipment.Armor = &game.ItemView{
+					ID:          armor.ID,
+					Name:        armor.Name,
+					Description: armor.Description,
+					Type:        armor.Type,
+					Armor:       armor.Armor,
+					IsEquipped:  true,
+				}
+			}
+		}
+	}
+
+	// Map grid (5x5)
+	gridSize := 5
+	snapshot.MapGrid = make([][]game.MapCell, gridSize)
+	for y := 0; y < gridSize; y++ {
+		snapshot.MapGrid[y] = make([]game.MapCell, gridSize)
+		for x := 0; x < gridSize; x++ {
+			cell := game.MapCell{
+				X:      x,
+				Y:      y,
+				Status: "unknown",
+			}
+
+			mapRoom := s.state.GetRoomAt(x, y)
+			if mapRoom != nil {
+				cell.RoomID = mapRoom.ID
+
+				// Get exits for this room
+				exits := s.state.GetRoomExits(mapRoom.ID)
+				cell.Exits = make([]string, 0, len(exits))
+				for dir := range exits {
+					cell.Exits = append(cell.Exits, dir)
+				}
+
+				if room != nil && mapRoom.ID == room.ID {
+					cell.Status = "current"
+					cell.HasPlayer = true
+				} else if mapRoom.IsExit && s.state.IsRoomVisited(mapRoom.ID) {
+					cell.Status = "exit"
+				} else if s.state.IsRoomVisited(mapRoom.ID) {
+					cell.Status = "visited"
+				} else if s.state.IsRoomAdjacent(mapRoom.ID) {
+					cell.Status = "adjacent"
+				}
+			}
+
+			snapshot.MapGrid[y][x] = cell
+		}
+	}
+
+	return snapshot
 }
 
 // ListTools returns all available MCP tools
@@ -282,7 +458,8 @@ func (s *Server) handleNewGame(characterName string) (*ToolResult, error) {
 	sb.WriteString("Use 'look' to see your surroundings.")
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -367,7 +544,8 @@ func (s *Server) handleLook() (*ToolResult, error) {
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -400,7 +578,8 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 	// Check for victory
 	if s.state.Victory {
 		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "You step through the exit and escape the dungeon!\n\n🏆 VICTORY! 🏆\n\nCongratulations, brave adventurer! Use 'new_game' to play again."}},
+			Content:   []ContentBlock{{Type: "text", Text: "You step through the exit and escape the dungeon!\n\n🏆 VICTORY! 🏆\n\nCongratulations, brave adventurer! Use 'new_game' to play again."}},
+			GameState: s.buildGameStateSnapshot(),
 		}, nil
 	}
 
@@ -421,7 +600,8 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -500,7 +680,8 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -528,12 +709,14 @@ func (s *Server) handleTake(itemID string) (*ToolResult, error) {
 	err := s.state.TakeItem(itemID)
 	if err != nil {
 		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: err.Error()}},
+			Content:   []ContentBlock{{Type: "text", Text: err.Error()}},
+			GameState: s.buildGameStateSnapshot(),
 		}, nil
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("You pick up the %s.", item.Name)}},
+		Content:   []ContentBlock{{Type: "text", Text: fmt.Sprintf("You pick up the %s.", item.Name)}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -554,12 +737,14 @@ func (s *Server) handleUse(itemID string) (*ToolResult, error) {
 	message, err := s.state.UseItem(itemID)
 	if err != nil {
 		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: err.Error()}},
+			Content:   []ContentBlock{{Type: "text", Text: err.Error()}},
+			GameState: s.buildGameStateSnapshot(),
 		}, nil
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: message}},
+		Content:   []ContentBlock{{Type: "text", Text: message}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -599,7 +784,8 @@ func (s *Server) handleInventory() (*ToolResult, error) {
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -666,7 +852,8 @@ func (s *Server) handleStats() (*ToolResult, error) {
 	sb.WriteString(fmt.Sprintf("Inventory: %d items\n", len(inv)))
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -681,7 +868,8 @@ func (s *Server) handleMap() (*ToolResult, error) {
 	mapStr := s.state.RenderMap(5) // 5x5 grid
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: mapStr}},
+		Content:   []ContentBlock{{Type: "text", Text: mapStr}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 
@@ -747,12 +935,14 @@ func (s *Server) handleEquip(itemID string) (*ToolResult, error) {
 
 	default:
 		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Cannot equip %s - it's not a weapon or armor.", item.Name)}},
+			Content:   []ContentBlock{{Type: "text", Text: fmt.Sprintf("Cannot equip %s - it's not a weapon or armor.", item.Name)}},
+			GameState: s.buildGameStateSnapshot(),
 		}, nil
 	}
 
 	return &ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: sb.String()}},
+		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
+		GameState: s.buildGameStateSnapshot(),
 	}, nil
 }
 

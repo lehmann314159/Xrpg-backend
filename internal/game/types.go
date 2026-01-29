@@ -112,3 +112,82 @@ type UIPanel struct {
 	Priority string                 `json:"priority"` // high, medium, low
 	Data     map[string]interface{} `json:"data"`
 }
+
+// === View Types for Frontend ===
+
+// CharacterView is a frontend-friendly view of character state
+type CharacterView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	HP        int    `json:"hp"`
+	MaxHP     int    `json:"maxHp"`
+	Strength  int    `json:"strength"`
+	Dexterity int    `json:"dexterity"`
+	IsAlive   bool   `json:"isAlive"`
+	Status    string `json:"status"` // "Healthy", "Wounded", "Critical", "Dead"
+}
+
+// RoomView is a frontend-friendly view of a room
+type RoomView struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	IsEntrance  bool     `json:"isEntrance"`
+	IsExit      bool     `json:"isExit"`
+	X           int      `json:"x"`
+	Y           int      `json:"y"`
+	Exits       []string `json:"exits"` // Available exit directions
+}
+
+// MonsterView is a frontend-friendly view of a monster
+type MonsterView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	HP          int    `json:"hp"`
+	MaxHP       int    `json:"maxHp"`
+	Damage      int    `json:"damage"`
+}
+
+// ItemView is a frontend-friendly view of an item
+type ItemView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Type        string `json:"type"` // weapon, armor, consumable, key, treasure
+	Damage      int    `json:"damage,omitempty"`
+	Armor       int    `json:"armor,omitempty"`
+	Healing     int    `json:"healing,omitempty"`
+	IsEquipped  bool   `json:"isEquipped"`
+}
+
+// EquipmentView shows currently equipped items
+type EquipmentView struct {
+	Weapon *ItemView `json:"weapon,omitempty"`
+	Armor  *ItemView `json:"armor,omitempty"`
+}
+
+// MapCell represents a single cell in the map grid
+type MapCell struct {
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	RoomID    string `json:"roomId,omitempty"`
+	Status    string `json:"status"` // "unknown", "visited", "current", "adjacent", "exit"
+	HasPlayer bool   `json:"hasPlayer"`
+	Exits     []string `json:"exits,omitempty"` // Available directions
+}
+
+// GameStateSnapshot is the complete game state for the frontend
+type GameStateSnapshot struct {
+	Character   *CharacterView  `json:"character,omitempty"`
+	CurrentRoom *RoomView       `json:"currentRoom,omitempty"`
+	Monsters    []*MonsterView  `json:"monsters,omitempty"`
+	RoomItems   []*ItemView     `json:"roomItems,omitempty"`
+	Inventory   []*ItemView     `json:"inventory,omitempty"`
+	Equipment   *EquipmentView  `json:"equipment,omitempty"`
+	MapGrid     [][]MapCell     `json:"mapGrid,omitempty"`
+	GameOver    bool            `json:"gameOver"`
+	Victory     bool            `json:"victory"`
+	TurnNumber  int             `json:"turnNumber"`
+	Message     string          `json:"message,omitempty"` // Event message for transient notifications
+}
