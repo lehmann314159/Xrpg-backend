@@ -7,7 +7,7 @@ services:
     environment:
       - PORT=8080
       - DB_PATH=/data/dungeon-crawler.db
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://dungeon-crawler.verynormalserver.com}
     volumes:
       - xrpg-data:/data
     restart: unless-stopped
