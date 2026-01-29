@@ -1,15 +1,16 @@
 version: '3'
 services:
-  dungeon-crawler:
-    image: lehmann314159/dungeon-crawler:latest
+  xrpg-backend:
+    image: lehmann314159/xrpg-backend:latest
     ports:
       - "8080:8080"
     environment:
       - PORT=8080
       - DB_PATH=/data/dungeon-crawler.db
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
     volumes:
-      - dungeon-data:/data
+      - xrpg-data:/data
     restart: unless-stopped
 
 volumes:
-  dungeon-data:
+  xrpg-data:
