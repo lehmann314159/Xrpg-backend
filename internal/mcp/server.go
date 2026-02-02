@@ -157,6 +157,82 @@ func (s *Server) isMonsterDefeated(monsterID string) bool {
 	return false
 }
 
+// Error messages as constants to avoid duplication
+const (
+	errNoGame       = "No game in progress. Use 'new_game' to start."
+	errGameOver     = "Game is over. Use 'new_game' to play again."
+	errVictory      = "You have escaped the dungeon! Victory! Use 'new_game' to play again."
+	errDead         = "You are dead. Use 'new_game' to play again."
+	errAlreadyWon   = "You have already won! Use 'new_game' to play again."
+)
+
+// requireActiveGame checks if a game is in progress and not over.
+// Returns a ToolResult with an error message if the game is not active, or nil if OK.
+func (s *Server) requireActiveGame() *ToolResult {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: errNoGame}},
+		}
+	}
+	if s.state.GameOver {
+		if s.state.Victory {
+			return &ToolResult{
+				Content: []ContentBlock{{Type: "text", Text: errVictory}},
+			}
+		}
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: errDead}},
+		}
+	}
+	return nil
+}
+
+// requireActiveGameForAction is like requireActiveGame but uses a simpler "game over" message
+// suitable for actions that don't need to distinguish between victory and death.
+func (s *Server) requireActiveGameForAction() *ToolResult {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: errNoGame}},
+		}
+	}
+	if s.state.GameOver {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: errGameOver}},
+		}
+	}
+	return nil
+}
+
+// requireInitialized checks only if a game is initialized (for read-only operations like inventory/stats).
+func (s *Server) requireInitialized() *ToolResult {
+	if !s.state.IsInitialized() {
+		return &ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: errNoGame}},
+		}
+	}
+	return nil
+}
+
+// beginTurn resets turn context and increments turn counters for a standard action.
+func (s *Server) beginTurn() {
+	s.state.ResetTurnContext()
+	s.state.IncrementTurnsInRoom()
+}
+
+// beginCombatTurn resets turn context and increments both room and combat counters.
+func (s *Server) beginCombatTurn() {
+	s.state.ResetTurnContext()
+	s.state.IncrementTurnsInRoom()
+	s.state.IncrementConsecutiveCombat()
+}
+
+// beginMovementTurn resets turn context and resets room/combat counters for movement.
+func (s *Server) beginMovementTurn() {
+	s.state.ResetTurnContext()
+	s.state.ResetTurnsInRoom()
+	s.state.ResetConsecutiveCombat()
+}
+
 // buildGameStateSnapshot creates a snapshot of the current game state for the frontend
 func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 	if !s.state.IsInitialized() {
@@ -622,21 +698,8 @@ func (s *Server) handleNewGame(characterName string) (*ToolResult, error) {
 
 // handleLook shows the current room
 func (s *Server) handleLook() (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
-	}
-
-	if s.state.GameOver {
-		if s.state.Victory {
-			return &ToolResult{
-				Content: []ContentBlock{{Type: "text", Text: "You have escaped the dungeon! Victory! Use 'new_game' to play again."}},
-			}, nil
-		}
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "You are dead. Use 'new_game' to play again."}},
-		}, nil
+	if errResult := s.requireActiveGame(); errResult != nil {
+		return errResult, nil
 	}
 
 	room := s.state.GetCurrentRoom()
@@ -647,9 +710,7 @@ func (s *Server) handleLook() (*ToolResult, error) {
 		}, nil
 	}
 
-	// Reset turn context and set event
-	s.state.ResetTurnContext()
-	s.state.IncrementTurnsInRoom()
+	s.beginTurn()
 	s.state.SetLastEvent(&game.EventInfo{
 		Type:    "interaction",
 		Subtype: "look",
@@ -716,25 +777,11 @@ func (s *Server) handleLook() (*ToolResult, error) {
 
 // handleMove moves the character
 func (s *Server) handleMove(direction string) (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
+	if errResult := s.requireActiveGame(); errResult != nil {
+		return errResult, nil
 	}
 
-	if s.state.GameOver {
-		if s.state.Victory {
-			return &ToolResult{
-				Content: []ContentBlock{{Type: "text", Text: "You have already won! Use 'new_game' to play again."}},
-			}, nil
-		}
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "You are dead. Use 'new_game' to play again."}},
-		}, nil
-	}
-
-	// Reset turn context
-	s.state.ResetTurnContext()
+	s.beginMovementTurn()
 
 	err := s.state.MoveCharacter(direction)
 	if err != nil {
@@ -743,9 +790,6 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 		}, nil
 	}
 
-	// Update turn context for movement
-	s.state.ResetTurnsInRoom()
-	s.state.ResetConsecutiveCombat()
 	s.state.SetLastEvent(&game.EventInfo{
 		Type:    "movement",
 		Subtype: "room_enter",
@@ -787,16 +831,8 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 
 // handleAttack attacks a monster
 func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
-	}
-
-	if s.state.GameOver {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
-		}, nil
+	if errResult := s.requireActiveGameForAction(); errResult != nil {
+		return errResult, nil
 	}
 
 	// Find the monster
@@ -821,10 +857,7 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 		}, nil
 	}
 
-	// Reset turn context
-	s.state.ResetTurnContext()
-	s.state.IncrementTurnsInRoom()
-	s.state.IncrementConsecutiveCombat()
+	s.beginCombatTurn()
 
 	// Calculate equipment bonuses
 	weaponBonus := 0
@@ -898,16 +931,8 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 
 // handleTake picks up an item
 func (s *Server) handleTake(itemID string) (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
-	}
-
-	if s.state.GameOver {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
-		}, nil
+	if errResult := s.requireActiveGameForAction(); errResult != nil {
+		return errResult, nil
 	}
 
 	item, ok := s.state.Items[itemID]
@@ -917,9 +942,7 @@ func (s *Server) handleTake(itemID string) (*ToolResult, error) {
 		}, nil
 	}
 
-	// Reset turn context
-	s.state.ResetTurnContext()
-	s.state.IncrementTurnsInRoom()
+	s.beginTurn()
 
 	err := s.state.TakeItem(itemID)
 	if err != nil {
@@ -945,21 +968,11 @@ func (s *Server) handleTake(itemID string) (*ToolResult, error) {
 
 // handleUse uses an item from inventory
 func (s *Server) handleUse(itemID string) (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
+	if errResult := s.requireActiveGameForAction(); errResult != nil {
+		return errResult, nil
 	}
 
-	if s.state.GameOver {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
-		}, nil
-	}
-
-	// Reset turn context
-	s.state.ResetTurnContext()
-	s.state.IncrementTurnsInRoom()
+	s.beginTurn()
 
 	// Track item used before it's removed
 	s.state.RecordItemUsed(itemID)
@@ -986,10 +999,8 @@ func (s *Server) handleUse(itemID string) (*ToolResult, error) {
 
 // handleInventory shows the character's inventory
 func (s *Server) handleInventory() (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
+	if errResult := s.requireInitialized(); errResult != nil {
+		return errResult, nil
 	}
 
 	items := s.state.GetInventory()
@@ -1027,10 +1038,8 @@ func (s *Server) handleInventory() (*ToolResult, error) {
 
 // handleStats shows character stats
 func (s *Server) handleStats() (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
+	if errResult := s.requireInitialized(); errResult != nil {
+		return errResult, nil
 	}
 
 	char := s.state.Character
@@ -1095,10 +1104,8 @@ func (s *Server) handleStats() (*ToolResult, error) {
 
 // handleMap shows the dungeon map
 func (s *Server) handleMap() (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
+	if errResult := s.requireInitialized(); errResult != nil {
+		return errResult, nil
 	}
 
 	mapStr := s.state.RenderMap(5) // 5x5 grid
@@ -1111,16 +1118,8 @@ func (s *Server) handleMap() (*ToolResult, error) {
 
 // handleEquip equips a weapon or armor
 func (s *Server) handleEquip(itemID string) (*ToolResult, error) {
-	if !s.state.IsInitialized() {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "No game in progress. Use 'new_game' to start."}},
-		}, nil
-	}
-
-	if s.state.GameOver {
-		return &ToolResult{
-			Content: []ContentBlock{{Type: "text", Text: "Game is over. Use 'new_game' to play again."}},
-		}, nil
+	if errResult := s.requireActiveGameForAction(); errResult != nil {
+		return errResult, nil
 	}
 
 	item, ok := s.state.Items[itemID]

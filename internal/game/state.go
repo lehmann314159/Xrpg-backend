@@ -3,6 +3,7 @@ package game
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,7 @@ type TurnContext struct {
 
 // GameState holds all in-memory game state
 type GameState struct {
+	mu           sync.RWMutex
 	Character    *Character
 	Dungeon      *Dungeon
 	Rooms        map[string]*Room             // keyed by room ID
@@ -31,6 +33,26 @@ type GameState struct {
 	GameOver     bool
 	Victory      bool
 	TurnContext  *TurnContext
+}
+
+// Lock acquires a write lock on the game state
+func (gs *GameState) Lock() {
+	gs.mu.Lock()
+}
+
+// Unlock releases the write lock on the game state
+func (gs *GameState) Unlock() {
+	gs.mu.Unlock()
+}
+
+// RLock acquires a read lock on the game state
+func (gs *GameState) RLock() {
+	gs.mu.RLock()
+}
+
+// RUnlock releases the read lock on the game state
+func (gs *GameState) RUnlock() {
+	gs.mu.RUnlock()
 }
 
 // NewGameState creates an empty game state
