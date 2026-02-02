@@ -1,9 +1,6 @@
-version: '3'
 services:
   xrpg-backend:
     image: lehmann314159/xrpg-backend:latest
-    ports:
-      - "8080:8080"
     environment:
       - PORT=8080
       - DB_PATH=/data/dungeon-crawler.db
@@ -11,6 +8,12 @@ services:
     volumes:
       - xrpg-data:/data
     restart: unless-stopped
+    networks:
+      - web
 
 volumes:
   xrpg-data:
+
+networks:
+  web:
+    external: true
