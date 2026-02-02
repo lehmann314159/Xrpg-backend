@@ -3,13 +3,44 @@ package game
 import (
 	"fmt"
 	"math/rand"
+	"sync"
+	"time"
 )
+
+// Combat constants
+const (
+	D20               = 20 // Twenty-sided die for attack rolls
+	D6                = 6  // Six-sided die for damage rolls
+	BaseDefense       = 10 // Base armor class / defense value
+	CriticalThreshold = 5  // Minimum d6 roll for critical hit (5 or 6)
+	MinDamage         = 1  // Minimum damage on a hit
+)
+
+// combatRandom is the seeded random source for combat
+var (
+	combatRandom *rand.Rand
+	combatMu     sync.Mutex
+)
+
+func init() {
+	// Initialize with a default seed based on current time
+	combatRandom = rand.New(rand.NewSource(time.Now().UnixNano()))
+}
+
+// SetCombatSeed sets the random seed for combat, making it reproducible
+func SetCombatSeed(seed int64) {
+	combatMu.Lock()
+	defer combatMu.Unlock()
+	combatRandom = rand.New(rand.NewSource(seed))
+}
 
 // Combat handles turn-based combat mechanics
 
-// RollDice simulates a dice roll (e.g., d20)
+// RollDice simulates a dice roll (e.g., d20) using the seeded random source
 func RollDice(sides int) int {
-	return rand.Intn(sides) + 1
+	combatMu.Lock()
+	defer combatMu.Unlock()
+	return combatRandom.Intn(sides) + 1
 }
 
 // RollDamage calculates damage with dice (e.g., 2d6 + modifier)
@@ -27,16 +58,16 @@ func RollDamage(numDice, diceSides, modifier int) int {
 // CalculateAttack performs a turn-based attack
 func CalculateAttack(attackerStrength, defenderArmor int) *CombatResult {
 	// Attack roll: d20 + strength modifier
-	attackRoll := RollDice(20) + (attackerStrength / 2)
-	
-	// Defense: 10 + armor bonus
-	defense := 10 + defenderArmor
-	
+	attackRoll := RollDice(D20) + (attackerStrength / 2)
+
+	// Defense: base + armor bonus
+	defense := BaseDefense + defenderArmor
+
 	result := &CombatResult{}
-	
+
 	if attackRoll >= defense {
 		// Hit! Roll damage
-		damage := RollDamage(1, 6, attackerStrength/2)
+		damage := RollDamage(1, D6, attackerStrength/2)
 		result.DefenderDamage = damage
 		result.Message = "Hit!"
 	} else {
@@ -44,7 +75,7 @@ func CalculateAttack(attackerStrength, defenderArmor int) *CombatResult {
 		result.DefenderDamage = 0
 		result.Message = "Miss!"
 	}
-	
+
 	return result
 }
 
@@ -64,8 +95,8 @@ func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string,
 	playerDamageBonus := (player.Strength / 2) + weaponBonus
 
 	// Player attacks monster
-	attackRoll := RollDice(20) + (player.Dexterity / 2)
-	monsterDefense := 10 // Base monster AC
+	attackRoll := RollDice(D20) + (player.Dexterity / 2)
+	monsterDefense := BaseDefense
 
 	playerAttack := &AttackResult{
 		AttackerName: player.Name,
@@ -74,15 +105,15 @@ func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string,
 
 	if attackRoll >= monsterDefense {
 		// Hit! Roll damage - track the d6 roll for critical detection
-		damageRoll := RollDice(6)
+		damageRoll := RollDice(D6)
 		damage := damageRoll + playerDamageBonus
-		if damage < 1 {
-			damage = 1 // Minimum 1 damage on hit
+		if damage < MinDamage {
+			damage = MinDamage
 		}
 
 		playerAttack.WasHit = true
 		playerAttack.Damage = damage
-		playerAttack.WasCritical = damageRoll >= 5 // Critical on 5 or 6
+		playerAttack.WasCritical = damageRoll >= CriticalThreshold
 
 		monster.HP -= damage
 		result.DefenderDamage = damage
@@ -124,9 +155,9 @@ func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string,
 	enhanced.PlayerAttack = playerAttack
 
 	// Monster counter-attacks
-	monsterAttackRoll := RollDice(20)
+	monsterAttackRoll := RollDice(D20)
 	// Player defense includes dexterity and equipped armor
-	playerDefense := 10 + (player.Dexterity / 2) + armorBonus
+	playerDefense := BaseDefense + (player.Dexterity / 2) + armorBonus
 
 	enemyAttack := &AttackResult{
 		AttackerName: monster.Name,
@@ -135,15 +166,15 @@ func ExecuteCombatTurn(player *Character, monster *Monster, playerAction string,
 
 	if monsterAttackRoll >= playerDefense {
 		// Monster hits - roll d6 for damage variance and critical detection
-		damageRoll := RollDice(6)
+		damageRoll := RollDice(D6)
 		monsterDamage := monster.Damage + (damageRoll - 3) // -2 to +3 variance
-		if monsterDamage < 1 {
-			monsterDamage = 1
+		if monsterDamage < MinDamage {
+			monsterDamage = MinDamage
 		}
 
 		enemyAttack.WasHit = true
 		enemyAttack.Damage = monsterDamage
-		enemyAttack.WasCritical = damageRoll >= 5 // Critical on 5 or 6
+		enemyAttack.WasCritical = damageRoll >= CriticalThreshold
 
 		player.TakeDamage(monsterDamage)
 		result.AttackerDamage = monsterDamage

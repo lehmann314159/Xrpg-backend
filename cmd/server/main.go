@@ -129,18 +129,22 @@ func (s *Server) setupRoutes() {
 // Health check handler
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status": "healthy",
-	})
+	}); err != nil {
+		log.Printf("Error encoding health response: %v", err)
+	}
 }
 
 // MCP tool listing handler
 func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	tools := s.mcpServer.ListTools()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"tools": tools,
-	})
+	}); err != nil {
+		log.Printf("Error encoding tools response: %v", err)
+	}
 }
 
 // MCP tool call handler
@@ -162,7 +166,9 @@ func (s *Server) handleCallTool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.Printf("Error encoding tool result: %v", err)
+	}
 }
 
 // REST API handlers (stubs)
@@ -170,9 +176,11 @@ func (s *Server) handleCallTool(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateCharacter(w http.ResponseWriter, r *http.Request) {
 	// TODO: Implement character creation
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"message": "Character creation not yet implemented",
-	})
+	}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
 }
 
 func (s *Server) handleGetCharacter(w http.ResponseWriter, r *http.Request) {
@@ -181,18 +189,22 @@ func (s *Server) handleGetCharacter(w http.ResponseWriter, r *http.Request) {
 	characterID := vars["id"]
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"message":      "Character retrieval not yet implemented",
 		"character_id": characterID,
-	})
+	}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
 }
 
 func (s *Server) handleCreateDungeon(w http.ResponseWriter, r *http.Request) {
 	// TODO: Implement dungeon generation
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"message": "Dungeon generation not yet implemented",
-	})
+	}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
 }
 
 func (s *Server) handleGetDungeon(w http.ResponseWriter, r *http.Request) {
@@ -201,8 +213,10 @@ func (s *Server) handleGetDungeon(w http.ResponseWriter, r *http.Request) {
 	dungeonID := vars["id"]
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"message":    "Dungeon retrieval not yet implemented",
 		"dungeon_id": dungeonID,
-	})
+	}); err != nil {
+		log.Printf("Error encoding response: %v", err)
+	}
 }

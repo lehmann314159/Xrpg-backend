@@ -8,7 +8,30 @@ import (
 	"github.com/yourusername/dungeon-crawler/internal/game"
 )
 
-const GridSize = 5
+// Grid and generation constants
+const (
+	GridSize = 5 // Dungeon grid dimensions (5x5)
+
+	// Door distribution probabilities
+	OneDoorExtraChance = 0.75 // Chance to add door to 1-door room
+	TwoDoorExtraChance = 0.25 // Chance to add door to 2-door room
+	MaxDoorsPerRoom    = 3    // Maximum doors per room
+
+	// Monster spawn constants
+	MonsterSpawnChance      = 0.70 // Base chance for monsters in a room
+	MultiMonsterMinDiff     = 3    // Minimum difficulty for multiple monsters
+	MultiMonsterChance      = 0.40 // Chance for 2 monsters at high difficulty
+	DifficultyScaleFactor   = 0.15 // HP/damage scaling per difficulty level
+
+	// Item spawn constants
+	BaseItemChance    = 0.25 // Base chance for item spawn
+	ItemChancePerDiff = 0.05 // Additional item chance per difficulty
+	MaxItemChance     = 0.50 // Maximum item spawn chance
+
+	// Description weighting
+	ScaryDescriptionDist    = 4   // Distance threshold for scary descriptions
+	ScaryDescriptionChance  = 0.5 // Chance to use scarier description
+)
 
 // DungeonGenerator handles procedural dungeon generation
 type DungeonGenerator struct {
@@ -137,17 +160,17 @@ func (dg *DungeonGenerator) generateConnections(roomGrid map[coord]*game.Room) [
 		fromDoors := doorCounts[e.from]
 		toDoors := doorCounts[e.to]
 
-		// Don't exceed 3 doors per room
-		if fromDoors >= 3 || toDoors >= 3 {
+		// Don't exceed max doors per room
+		if fromDoors >= MaxDoorsPerRoom || toDoors >= MaxDoorsPerRoom {
 			continue
 		}
 
 		// Decide if we should add this edge based on distribution goals
 		// Rooms with 1 door should sometimes get more, rooms with 2 might get a 3rd
 		shouldAdd := false
-		if fromDoors == 1 && dg.random.Float32() < 0.75 {
+		if fromDoors == 1 && dg.random.Float32() < OneDoorExtraChance {
 			shouldAdd = true // 1-door rooms often need more
-		} else if fromDoors == 2 && dg.random.Float32() < 0.25 {
+		} else if fromDoors == 2 && dg.random.Float32() < TwoDoorExtraChance {
 			shouldAdd = true // Some 2-door rooms become 3-door
 		}
 
@@ -282,7 +305,7 @@ func (dg *DungeonGenerator) generateRoomDescription(x, y int) string {
 
 	// Use distance to weight toward scarier descriptions
 	idx := dg.random.Intn(len(descriptions))
-	if distance > 4 && dg.random.Float32() < 0.5 {
+	if distance > ScaryDescriptionDist && dg.random.Float32() < ScaryDescriptionChance {
 		idx = dg.random.Intn(3) + 5 // Prefer scarier ones
 	}
 
@@ -361,11 +384,11 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 		}
 	}
 
-	// 70% chance of monsters in non-entrance/exit rooms
-	if len(eligibleMonsters) > 0 && dg.random.Float32() < 0.7 {
+	// Chance of monsters in non-entrance/exit rooms
+	if len(eligibleMonsters) > 0 && dg.random.Float32() < MonsterSpawnChance {
 		// Spawn 1-2 monsters
 		numMonsters := 1
-		if difficulty >= 3 && dg.random.Float32() < 0.4 {
+		if difficulty >= MultiMonsterMinDiff && dg.random.Float32() < MultiMonsterChance {
 			numMonsters = 2
 		}
 
@@ -375,7 +398,7 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 			template := eligibleMonsters[idx]
 
 			// Scale HP and damage with difficulty
-			scaleFactor := 1.0 + float64(difficulty)*0.15
+			scaleFactor := 1.0 + float64(difficulty)*DifficultyScaleFactor
 			monster := &game.Monster{
 				ID:          generateID(),
 				Name:        template.Name,
@@ -390,10 +413,10 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 		}
 	}
 
-	// Chance to spawn an item (25% base + 5% per difficulty)
-	itemChance := 0.25 + float64(difficulty)*0.05
-	if itemChance > 0.5 {
-		itemChance = 0.5
+	// Chance to spawn an item (base + per-difficulty bonus, capped)
+	itemChance := BaseItemChance + float64(difficulty)*ItemChancePerDiff
+	if itemChance > MaxItemChance {
+		itemChance = MaxItemChance
 	}
 
 	if dg.random.Float64() < itemChance {

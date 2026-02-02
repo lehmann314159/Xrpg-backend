@@ -20,19 +20,22 @@ type TurnContext struct {
 
 // GameState holds all in-memory game state
 type GameState struct {
-	mu           sync.RWMutex
-	Character    *Character
-	Dungeon      *Dungeon
-	Rooms        map[string]*Room             // keyed by room ID
-	RoomsByCoord map[string]*Room             // keyed by "x,y"
-	Connections  map[string][]*RoomConnection // keyed by room ID
-	Monsters     map[string]*Monster          // keyed by monster ID
-	Items        map[string]*Item             // keyed by item ID
-	Traps        map[string]*Trap             // keyed by trap ID
-	VisitedRooms map[string]bool              // keyed by room ID
-	GameOver     bool
-	Victory      bool
-	TurnContext  *TurnContext
+	mu             sync.RWMutex
+	Character      *Character
+	Dungeon        *Dungeon
+	Rooms          map[string]*Room             // keyed by room ID
+	RoomsByCoord   map[string]*Room             // keyed by "x,y"
+	Connections    map[string][]*RoomConnection // keyed by room ID
+	Monsters       map[string]*Monster          // keyed by monster ID
+	MonstersByRoom map[string]map[string]bool   // room ID -> monster IDs (for O(1) lookup)
+	Items          map[string]*Item             // keyed by item ID
+	ItemsByRoom    map[string]map[string]bool   // room ID -> item IDs (for O(1) lookup)
+	ItemsByChar    map[string]map[string]bool   // character ID -> item IDs (for O(1) lookup)
+	Traps          map[string]*Trap             // keyed by trap ID
+	VisitedRooms   map[string]bool              // keyed by room ID
+	GameOver       bool
+	Victory        bool
+	TurnContext    *TurnContext
 }
 
 // Lock acquires a write lock on the game state
@@ -58,14 +61,17 @@ func (gs *GameState) RUnlock() {
 // NewGameState creates an empty game state
 func NewGameState() *GameState {
 	return &GameState{
-		Rooms:        make(map[string]*Room),
-		RoomsByCoord: make(map[string]*Room),
-		Connections:  make(map[string][]*RoomConnection),
-		Monsters:     make(map[string]*Monster),
-		Items:        make(map[string]*Item),
-		Traps:        make(map[string]*Trap),
-		VisitedRooms: make(map[string]bool),
-		TurnContext:  &TurnContext{},
+		Rooms:          make(map[string]*Room),
+		RoomsByCoord:   make(map[string]*Room),
+		Connections:    make(map[string][]*RoomConnection),
+		Monsters:       make(map[string]*Monster),
+		MonstersByRoom: make(map[string]map[string]bool),
+		Items:          make(map[string]*Item),
+		ItemsByRoom:    make(map[string]map[string]bool),
+		ItemsByChar:    make(map[string]map[string]bool),
+		Traps:          make(map[string]*Trap),
+		VisitedRooms:   make(map[string]bool),
+		TurnContext:    &TurnContext{},
 	}
 }
 
@@ -152,22 +158,30 @@ func (gs *GameState) GetRoomExits(roomID string) map[string]string {
 	return exits
 }
 
-// GetRoomMonsters returns all alive monsters in a room
+// GetRoomMonsters returns all alive monsters in a room (O(1) lookup via index)
 func (gs *GameState) GetRoomMonsters(roomID string) []*Monster {
 	monsters := make([]*Monster, 0)
-	for _, m := range gs.Monsters {
-		if m.RoomID == roomID && m.IsAlive {
+	monsterIDs, ok := gs.MonstersByRoom[roomID]
+	if !ok {
+		return monsters
+	}
+	for monsterID := range monsterIDs {
+		if m, exists := gs.Monsters[monsterID]; exists && m.IsAlive {
 			monsters = append(monsters, m)
 		}
 	}
 	return monsters
 }
 
-// GetRoomItems returns all items in a room (not in inventory)
+// GetRoomItems returns all items in a room (O(1) lookup via index)
 func (gs *GameState) GetRoomItems(roomID string) []*Item {
 	items := make([]*Item, 0)
-	for _, item := range gs.Items {
-		if item.RoomID != nil && *item.RoomID == roomID {
+	itemIDs, ok := gs.ItemsByRoom[roomID]
+	if !ok {
+		return items
+	}
+	for itemID := range itemIDs {
+		if item, exists := gs.Items[itemID]; exists {
 			items = append(items, item)
 		}
 	}
@@ -185,14 +199,18 @@ func (gs *GameState) GetRoomTraps(roomID string) []*Trap {
 	return traps
 }
 
-// GetInventory returns all items carried by the character
+// GetInventory returns all items carried by the character (O(1) lookup via index)
 func (gs *GameState) GetInventory() []*Item {
 	items := make([]*Item, 0)
 	if gs.Character == nil {
 		return items
 	}
-	for _, item := range gs.Items {
-		if item.CharacterID != nil && *item.CharacterID == gs.Character.ID {
+	itemIDs, ok := gs.ItemsByChar[gs.Character.ID]
+	if !ok {
+		return items
+	}
+	for itemID := range itemIDs {
+		if item, exists := gs.Items[itemID]; exists {
 			items = append(items, item)
 		}
 	}
@@ -262,6 +280,16 @@ func (gs *GameState) TakeItem(itemID string) error {
 		return fmt.Errorf("item is already being carried")
 	}
 
+	// Update indexes: remove from room, add to character
+	oldRoomID := *item.RoomID
+	if gs.ItemsByRoom[oldRoomID] != nil {
+		delete(gs.ItemsByRoom[oldRoomID], itemID)
+	}
+	if gs.ItemsByChar[gs.Character.ID] == nil {
+		gs.ItemsByChar[gs.Character.ID] = make(map[string]bool)
+	}
+	gs.ItemsByChar[gs.Character.ID][itemID] = true
+
 	// Move to inventory
 	item.RoomID = nil
 	item.CharacterID = &gs.Character.ID
@@ -299,6 +327,11 @@ func (gs *GameState) UseItem(itemID string) (string, error) {
 			item.Name, healed, gs.Character.HP, gs.Character.MaxHP)
 	} else {
 		message = fmt.Sprintf("You use the %s.", item.Name)
+	}
+
+	// Remove from character index
+	if gs.ItemsByChar[gs.Character.ID] != nil {
+		delete(gs.ItemsByChar[gs.Character.ID], itemID)
 	}
 
 	// Remove item from inventory
@@ -345,14 +378,33 @@ func (gs *GameState) AddConnection(conn *RoomConnection) {
 	gs.Connections[conn.RoomID] = append(gs.Connections[conn.RoomID], conn)
 }
 
-// AddMonster adds a monster to the game state
+// AddMonster adds a monster to the game state and updates indexes
 func (gs *GameState) AddMonster(monster *Monster) {
 	gs.Monsters[monster.ID] = monster
+	// Update room index
+	if gs.MonstersByRoom[monster.RoomID] == nil {
+		gs.MonstersByRoom[monster.RoomID] = make(map[string]bool)
+	}
+	gs.MonstersByRoom[monster.RoomID][monster.ID] = true
 }
 
-// AddItem adds an item to the game state
+// AddItem adds an item to the game state and updates indexes
 func (gs *GameState) AddItem(item *Item) {
 	gs.Items[item.ID] = item
+	// Update room index if item is in a room
+	if item.RoomID != nil {
+		if gs.ItemsByRoom[*item.RoomID] == nil {
+			gs.ItemsByRoom[*item.RoomID] = make(map[string]bool)
+		}
+		gs.ItemsByRoom[*item.RoomID][item.ID] = true
+	}
+	// Update character index if item is in inventory
+	if item.CharacterID != nil {
+		if gs.ItemsByChar[*item.CharacterID] == nil {
+			gs.ItemsByChar[*item.CharacterID] = make(map[string]bool)
+		}
+		gs.ItemsByChar[*item.CharacterID][item.ID] = true
+	}
 }
 
 // AddTrap adds a trap to the game state

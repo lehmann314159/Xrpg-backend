@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -401,8 +400,8 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 		}
 	}
 
-	// Map grid (5x5)
-	gridSize := 5
+	// Map grid
+	gridSize := generator.GridSize
 	snapshot.MapGrid = make([][]game.MapCell, gridSize)
 	for y := 0; y < gridSize; y++ {
 		snapshot.MapGrid[y] = make([]game.MapCell, gridSize)
@@ -627,9 +626,10 @@ func (s *Server) handleNewGame(characterName string) (*ToolResult, error) {
 	character := game.NewCharacter(characterName)
 	s.state.Character = character
 
-	// Generate dungeon
+	// Generate dungeon with seeded randomness
 	seed := time.Now().UnixNano()
 	gen := generator.NewDungeonGenerator(seed)
+	game.SetCombatSeed(seed) // Use same seed for reproducible combat
 	dungeon, rooms, connections, err := gen.GenerateDungeon(1) // Depth 1 for MVP
 	if err != nil {
 		return &ToolResult{
@@ -1108,7 +1108,7 @@ func (s *Server) handleMap() (*ToolResult, error) {
 		return errResult, nil
 	}
 
-	mapStr := s.state.RenderMap(5) // 5x5 grid
+	mapStr := s.state.RenderMap(generator.GridSize)
 
 	return &ToolResult{
 		Content:   []ContentBlock{{Type: "text", Text: mapStr}},
@@ -1179,10 +1179,4 @@ func (s *Server) handleEquip(itemID string) (*ToolResult, error) {
 		Content:   []ContentBlock{{Type: "text", Text: sb.String()}},
 		GameState: s.buildGameStateSnapshot(),
 	}, nil
-}
-
-// Helper to marshal to JSON for debugging
-func toJSON(v interface{}) string {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	return string(b)
 }
