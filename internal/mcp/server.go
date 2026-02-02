@@ -42,6 +42,121 @@ type ContentBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
+// calculateThreat determines monster threat level relative to player
+func (s *Server) calculateThreat(monster *game.Monster, player *game.Character) string {
+	if player == nil || monster == nil {
+		return "normal"
+	}
+
+	// Compare monster damage potential to player HP
+	monsterThreat := float64(monster.Damage) / float64(player.HP)
+	// Compare monster HP to player damage potential (base strength / 2 + 1d6 avg of 3.5)
+	playerDamage := float64(player.Strength)/2 + 3.5
+	turnsToKill := float64(monster.HP) / playerDamage
+
+	if monsterThreat < 0.1 && turnsToKill < 2 {
+		return "trivial"
+	} else if monsterThreat >= 0.3 || turnsToKill >= 5 {
+		if monsterThreat >= 0.5 || turnsToKill >= 8 {
+			return "deadly"
+		}
+		return "dangerous"
+	}
+	return "normal"
+}
+
+// calculateAtmosphere determines room atmosphere based on threats and location
+func (s *Server) calculateAtmosphere(room *game.Room, monsters []*game.Monster, player *game.Character) string {
+	distance := room.X + room.Y // Manhattan distance
+
+	// Check for dangerous/deadly monsters
+	hasDangerousMonster := false
+	for _, m := range monsters {
+		threat := s.calculateThreat(m, player)
+		if threat == "dangerous" || threat == "deadly" {
+			hasDangerousMonster = true
+			break
+		}
+	}
+
+	if len(monsters) == 0 {
+		if distance <= 1 {
+			return "safe"
+		}
+		if distance >= 6 {
+			return "mysterious"
+		}
+		return "tense"
+	}
+
+	if hasDangerousMonster {
+		if distance >= 6 {
+			return "ominous"
+		}
+		return "dangerous"
+	}
+
+	return "tense"
+}
+
+// calculatePhase determines game phase based on room position
+func (s *Server) calculatePhase(room *game.Room) string {
+	if room == nil {
+		return "early_game"
+	}
+	distance := room.X + room.Y
+	if room.IsExit {
+		return "exit"
+	}
+	if distance <= 2 {
+		return "early_game"
+	}
+	if distance <= 5 {
+		return "mid_game"
+	}
+	return "late_game"
+}
+
+// calculateExplorationPct calculates percentage of dungeon explored
+func (s *Server) calculateExplorationPct() float64 {
+	if len(s.state.Rooms) == 0 {
+		return 0
+	}
+	visited := 0
+	for roomID := range s.state.Rooms {
+		if s.state.IsRoomVisited(roomID) {
+			visited++
+		}
+	}
+	return float64(visited) / float64(len(s.state.Rooms)) * 100
+}
+
+// isItemNew checks if an item was just discovered this turn
+func (s *Server) isItemNew(itemID string) bool {
+	if s.state.TurnContext == nil {
+		return false
+	}
+	for _, id := range s.state.TurnContext.NewItems {
+		if id == itemID {
+			return true
+		}
+	}
+	return false
+}
+
+// isMonsterDefeated checks if a monster was defeated this turn
+func (s *Server) isMonsterDefeated(monsterID string) bool {
+	if s.state.TurnContext == nil {
+		return false
+	}
+	for _, id := range s.state.TurnContext.DefeatedMonsters {
+		if id == monsterID {
+			return true
+		}
+	}
+	return false
+}
+
 // buildGameStateSnapshot creates a snapshot of the current game state for the frontend
 func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 	if !s.state.IsInitialized() {
@@ -79,6 +194,7 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 
 	// Current room view
 	room := s.state.GetCurrentRoom()
+	monsters := make([]*game.Monster, 0)
 	if room != nil {
 		exits := s.state.GetRoomExits(room.ID)
 		exitDirs := make([]string, 0, len(exits))
@@ -86,19 +202,30 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 			exitDirs = append(exitDirs, dir)
 		}
 
+		monsters = s.state.GetRoomMonsters(room.ID)
+
+		// Check if this is the first visit (room was just marked visited this turn)
+		isFirstVisit := false
+		if s.state.TurnContext != nil && s.state.TurnContext.LastEvent != nil {
+			if s.state.TurnContext.LastEvent.Type == "movement" {
+				isFirstVisit = true
+			}
+		}
+
 		snapshot.CurrentRoom = &game.RoomView{
-			ID:          room.ID,
-			Name:        room.Name,
-			Description: room.Description,
-			IsEntrance:  room.IsEntrance,
-			IsExit:      room.IsExit,
-			X:           room.X,
-			Y:           room.Y,
-			Exits:       exitDirs,
+			ID:           room.ID,
+			Name:         room.Name,
+			Description:  room.Description,
+			IsEntrance:   room.IsEntrance,
+			IsExit:       room.IsExit,
+			X:            room.X,
+			Y:            room.Y,
+			Exits:        exitDirs,
+			Atmosphere:   s.calculateAtmosphere(room, monsters, s.state.Character),
+			IsFirstVisit: isFirstVisit,
 		}
 
 		// Monsters in current room
-		monsters := s.state.GetRoomMonsters(room.ID)
 		snapshot.Monsters = make([]*game.MonsterView, 0, len(monsters))
 		for _, m := range monsters {
 			snapshot.Monsters = append(snapshot.Monsters, &game.MonsterView{
@@ -108,6 +235,8 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 				HP:          m.HP,
 				MaxHP:       m.MaxHP,
 				Damage:      m.Damage,
+				Threat:      s.calculateThreat(m, s.state.Character),
+				IsDefeated:  s.isMonsterDefeated(m.ID),
 			})
 		}
 
@@ -123,7 +252,9 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 				Damage:      item.Damage,
 				Armor:       item.Armor,
 				Healing:     item.Healing,
+				Rarity:      item.Rarity,
 				IsEquipped:  item.IsEquipped,
+				IsNew:       s.isItemNew(item.ID),
 			})
 		}
 	}
@@ -140,7 +271,9 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 			Damage:      item.Damage,
 			Armor:       item.Armor,
 			Healing:     item.Healing,
+			Rarity:      item.Rarity,
 			IsEquipped:  item.IsEquipped,
+			IsNew:       s.isItemNew(item.ID),
 		})
 	}
 
@@ -156,6 +289,7 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 					Description: weapon.Description,
 					Type:        weapon.Type,
 					Damage:      weapon.Damage,
+					Rarity:      weapon.Rarity,
 					IsEquipped:  true,
 				}
 			}
@@ -169,9 +303,25 @@ func (s *Server) buildGameStateSnapshot() *game.GameStateSnapshot {
 					Description: armor.Description,
 					Type:        armor.Type,
 					Armor:       armor.Armor,
+					Rarity:      armor.Rarity,
 					IsEquipped:  true,
 				}
 			}
+		}
+	}
+
+	// Turn context data
+	if s.state.TurnContext != nil {
+		snapshot.Event = s.state.TurnContext.LastEvent
+		snapshot.CombatResult = s.state.TurnContext.LastCombatResult
+		snapshot.InventoryDelta = s.state.TurnContext.InventoryDelta
+
+		// Game context
+		snapshot.Context = &game.GameContext{
+			Phase:             s.calculatePhase(room),
+			TurnsInRoom:       s.state.TurnContext.TurnsInRoom,
+			ConsecutiveCombat: s.state.TurnContext.ConsecutiveCombat,
+			ExplorationPct:    s.calculateExplorationPct(),
 		}
 	}
 
@@ -446,6 +596,13 @@ func (s *Server) handleNewGame(characterName string) (*ToolResult, error) {
 		}
 	}
 
+	// Initialize turn context with game start event
+	s.state.ResetTurnContext()
+	s.state.SetLastEvent(&game.EventInfo{
+		Type:    "interaction",
+		Subtype: "game_start",
+	})
+
 	// Build response
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("=== NEW GAME STARTED ===\n\n"))
@@ -489,6 +646,14 @@ func (s *Server) handleLook() (*ToolResult, error) {
 			IsError: true,
 		}, nil
 	}
+
+	// Reset turn context and set event
+	s.state.ResetTurnContext()
+	s.state.IncrementTurnsInRoom()
+	s.state.SetLastEvent(&game.EventInfo{
+		Type:    "interaction",
+		Subtype: "look",
+	})
 
 	var sb strings.Builder
 
@@ -568,6 +733,9 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 		}, nil
 	}
 
+	// Reset turn context
+	s.state.ResetTurnContext()
+
 	err := s.state.MoveCharacter(direction)
 	if err != nil {
 		return &ToolResult{
@@ -575,8 +743,20 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 		}, nil
 	}
 
+	// Update turn context for movement
+	s.state.ResetTurnsInRoom()
+	s.state.ResetConsecutiveCombat()
+	s.state.SetLastEvent(&game.EventInfo{
+		Type:    "movement",
+		Subtype: "room_enter",
+	})
+
 	// Check for victory
 	if s.state.Victory {
+		s.state.SetLastEvent(&game.EventInfo{
+			Type:    "victory",
+			Subtype: "dungeon_escaped",
+		})
 		return &ToolResult{
 			Content:   []ContentBlock{{Type: "text", Text: "You step through the exit and escape the dungeon!\n\n🏆 VICTORY! 🏆\n\nCongratulations, brave adventurer! Use 'new_game' to play again."}},
 			GameState: s.buildGameStateSnapshot(),
@@ -641,6 +821,11 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 		}, nil
 	}
 
+	// Reset turn context
+	s.state.ResetTurnContext()
+	s.state.IncrementTurnsInRoom()
+	s.state.IncrementConsecutiveCombat()
+
 	// Calculate equipment bonuses
 	weaponBonus := 0
 	armorBonus := 0
@@ -658,7 +843,16 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 	}
 
 	// Execute combat turn
-	result, _ := game.ExecuteCombatTurn(s.state.Character, monster, "attack", weaponBonus, armorBonus)
+	result, enhanced, _ := game.ExecuteCombatTurn(s.state.Character, monster, "attack", weaponBonus, armorBonus)
+
+	// Store enhanced combat result
+	s.state.SetLastCombatResult(enhanced)
+
+	// Determine event subtype based on outcome
+	eventSubtype := "attack_hit"
+	if enhanced.PlayerAttack != nil && !enhanced.PlayerAttack.WasHit {
+		eventSubtype = "attack_miss"
+	}
 
 	var sb strings.Builder
 	sb.WriteString("=== COMBAT ===\n\n")
@@ -668,15 +862,32 @@ func (s *Server) handleAttack(targetID string) (*ToolResult, error) {
 	// Check for player death
 	if result.AttackerDied {
 		s.state.KillCharacter()
+		s.state.SetLastEvent(&game.EventInfo{
+			Type:     "death",
+			Subtype:  "player_died",
+			Entities: []string{targetID},
+		})
 		sb.WriteString("\n💀 YOU HAVE DIED 💀\n\nUse 'new_game' to try again.")
 	} else if result.DefenderDied {
 		s.state.KillMonster(targetID)
+		s.state.RecordMonsterDefeated(targetID)
+		s.state.SetLastEvent(&game.EventInfo{
+			Type:     "combat",
+			Subtype:  "enemy_defeated",
+			Entities: []string{targetID},
+		})
 		sb.WriteString(fmt.Sprintf("\n✨ The %s has been defeated!\n", monster.Name))
 
 		// Check if room is clear
 		if !s.state.HasMonstersInRoom(s.state.Character.CurrentRoomID) {
 			sb.WriteString("\nThe room is now clear. You may proceed.")
 		}
+	} else {
+		s.state.SetLastEvent(&game.EventInfo{
+			Type:     "combat",
+			Subtype:  eventSubtype,
+			Entities: []string{targetID},
+		})
 	}
 
 	return &ToolResult{
@@ -706,6 +917,10 @@ func (s *Server) handleTake(itemID string) (*ToolResult, error) {
 		}, nil
 	}
 
+	// Reset turn context
+	s.state.ResetTurnContext()
+	s.state.IncrementTurnsInRoom()
+
 	err := s.state.TakeItem(itemID)
 	if err != nil {
 		return &ToolResult{
@@ -713,6 +928,14 @@ func (s *Server) handleTake(itemID string) (*ToolResult, error) {
 			GameState: s.buildGameStateSnapshot(),
 		}, nil
 	}
+
+	// Track item taken
+	s.state.RecordItemTaken(itemID)
+	s.state.SetLastEvent(&game.EventInfo{
+		Type:     "discovery",
+		Subtype:  "item_found",
+		Entities: []string{itemID},
+	})
 
 	return &ToolResult{
 		Content:   []ContentBlock{{Type: "text", Text: fmt.Sprintf("You pick up the %s.", item.Name)}},
@@ -734,6 +957,13 @@ func (s *Server) handleUse(itemID string) (*ToolResult, error) {
 		}, nil
 	}
 
+	// Reset turn context
+	s.state.ResetTurnContext()
+	s.state.IncrementTurnsInRoom()
+
+	// Track item used before it's removed
+	s.state.RecordItemUsed(itemID)
+
 	message, err := s.state.UseItem(itemID)
 	if err != nil {
 		return &ToolResult{
@@ -741,6 +971,12 @@ func (s *Server) handleUse(itemID string) (*ToolResult, error) {
 			GameState: s.buildGameStateSnapshot(),
 		}, nil
 	}
+
+	s.state.SetLastEvent(&game.EventInfo{
+		Type:     "interaction",
+		Subtype:  "item_used",
+		Entities: []string{itemID},
+	})
 
 	return &ToolResult{
 		Content:   []ContentBlock{{Type: "text", Text: message}},

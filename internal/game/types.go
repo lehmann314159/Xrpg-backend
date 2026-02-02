@@ -54,13 +54,14 @@ type Monster struct {
 
 // Item represents an object that can be picked up
 type Item struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Type        string `json:"type"` // weapon, armor, consumable, key, treasure
-	Damage      int    `json:"damage"`
-	Armor       int    `json:"armor"`
-	Healing     int    `json:"healing"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Type        string  `json:"type"` // weapon, armor, consumable, key, treasure
+	Damage      int     `json:"damage"`
+	Armor       int     `json:"armor"`
+	Healing     int     `json:"healing"`
+	Rarity      string  `json:"rarity"` // common, uncommon, rare, legendary
 	RoomID      *string `json:"room_id,omitempty"`
 	CharacterID *string `json:"character_id,omitempty"`
 	IsEquipped  bool    `json:"is_equipped"`
@@ -106,6 +107,46 @@ type CombatResult struct {
 	Message        string `json:"message"`
 }
 
+// EventInfo provides structured metadata about the last game event
+type EventInfo struct {
+	Type     string   `json:"type"`     // combat, discovery, movement, interaction, death, victory
+	Subtype  string   `json:"subtype"`  // attack_hit, attack_miss, enemy_defeated, item_found, etc.
+	Entities []string `json:"entities"` // IDs of involved monsters/items
+}
+
+// AttackResult represents the detailed outcome of a single attack
+type AttackResult struct {
+	AttackerName string `json:"attackerName"`
+	TargetName   string `json:"targetName"`
+	Damage       int    `json:"damage"`
+	WasHit       bool   `json:"wasHit"`
+	WasCritical  bool   `json:"wasCritical"`
+	RemainingHP  int    `json:"remainingHp"`
+}
+
+// EnhancedCombatResult provides detailed combat information for the frontend
+type EnhancedCombatResult struct {
+	PlayerAttack  *AttackResult `json:"playerAttack,omitempty"`
+	EnemyAttack   *AttackResult `json:"enemyAttack,omitempty"`
+	EnemyDefeated bool          `json:"enemyDefeated"`
+	PlayerDied    bool          `json:"playerDied"`
+}
+
+// InventoryDelta tracks changes to inventory this turn
+type InventoryDelta struct {
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+	Used    []string `json:"used,omitempty"`
+}
+
+// GameContext provides contextual information about game progression
+type GameContext struct {
+	Phase             string  `json:"phase"`             // early_game, mid_game, late_game, exit
+	TurnsInRoom       int     `json:"turnsInRoom"`
+	ConsecutiveCombat int     `json:"consecutiveCombat"`
+	ExplorationPct    float64 `json:"explorationPct"`
+}
+
 // UIPanel represents a suggested UI component
 type UIPanel struct {
 	Type     string                 `json:"type"`
@@ -129,14 +170,16 @@ type CharacterView struct {
 
 // RoomView is a frontend-friendly view of a room
 type RoomView struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	IsEntrance  bool     `json:"isEntrance"`
-	IsExit      bool     `json:"isExit"`
-	X           int      `json:"x"`
-	Y           int      `json:"y"`
-	Exits       []string `json:"exits"` // Available exit directions
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	IsEntrance   bool     `json:"isEntrance"`
+	IsExit       bool     `json:"isExit"`
+	X            int      `json:"x"`
+	Y            int      `json:"y"`
+	Exits        []string `json:"exits"` // Available exit directions
+	Atmosphere   string   `json:"atmosphere"`   // safe, tense, dangerous, mysterious, ominous
+	IsFirstVisit bool     `json:"isFirstVisit"`
 }
 
 // MonsterView is a frontend-friendly view of a monster
@@ -147,6 +190,8 @@ type MonsterView struct {
 	HP          int    `json:"hp"`
 	MaxHP       int    `json:"maxHp"`
 	Damage      int    `json:"damage"`
+	Threat      string `json:"threat"`      // trivial, normal, dangerous, deadly
+	IsDefeated  bool   `json:"isDefeated"`
 }
 
 // ItemView is a frontend-friendly view of an item
@@ -158,7 +203,9 @@ type ItemView struct {
 	Damage      int    `json:"damage,omitempty"`
 	Armor       int    `json:"armor,omitempty"`
 	Healing     int    `json:"healing,omitempty"`
+	Rarity      string `json:"rarity"` // common, uncommon, rare, legendary
 	IsEquipped  bool   `json:"isEquipped"`
+	IsNew       bool   `json:"isNew,omitempty"`
 }
 
 // EquipmentView shows currently equipped items
@@ -179,15 +226,19 @@ type MapCell struct {
 
 // GameStateSnapshot is the complete game state for the frontend
 type GameStateSnapshot struct {
-	Character   *CharacterView  `json:"character,omitempty"`
-	CurrentRoom *RoomView       `json:"currentRoom,omitempty"`
-	Monsters    []*MonsterView  `json:"monsters,omitempty"`
-	RoomItems   []*ItemView     `json:"roomItems,omitempty"`
-	Inventory   []*ItemView     `json:"inventory,omitempty"`
-	Equipment   *EquipmentView  `json:"equipment,omitempty"`
-	MapGrid     [][]MapCell     `json:"mapGrid,omitempty"`
-	GameOver    bool            `json:"gameOver"`
-	Victory     bool            `json:"victory"`
-	TurnNumber  int             `json:"turnNumber"`
-	Message     string          `json:"message,omitempty"` // Event message for transient notifications
+	Character      *CharacterView        `json:"character,omitempty"`
+	CurrentRoom    *RoomView             `json:"currentRoom,omitempty"`
+	Monsters       []*MonsterView        `json:"monsters,omitempty"`
+	RoomItems      []*ItemView           `json:"roomItems,omitempty"`
+	Inventory      []*ItemView           `json:"inventory,omitempty"`
+	Equipment      *EquipmentView        `json:"equipment,omitempty"`
+	MapGrid        [][]MapCell           `json:"mapGrid,omitempty"`
+	GameOver       bool                  `json:"gameOver"`
+	Victory        bool                  `json:"victory"`
+	TurnNumber     int                   `json:"turnNumber"`
+	Message        string                `json:"message,omitempty"` // Event message for transient notifications
+	Event          *EventInfo            `json:"event,omitempty"`
+	CombatResult   *EnhancedCombatResult `json:"combatResult,omitempty"`
+	InventoryDelta *InventoryDelta       `json:"inventoryDelta,omitempty"`
+	Context        *GameContext          `json:"context,omitempty"`
 }

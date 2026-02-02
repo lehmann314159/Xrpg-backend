@@ -306,6 +306,7 @@ type ItemTemplate struct {
 	Damage      int
 	Armor       int
 	Healing     int
+	Rarity      string // common, uncommon, rare, legendary
 }
 
 var monsterTemplates = []MonsterTemplate{
@@ -317,12 +318,12 @@ var monsterTemplates = []MonsterTemplate{
 }
 
 var itemTemplates = []ItemTemplate{
-	{Name: "Health Potion", Description: "A red vial that restores health.", Type: "consumable", Healing: 10},
-	{Name: "Greater Health Potion", Description: "A large red vial that restores significant health.", Type: "consumable", Healing: 20},
-	{Name: "Rusty Sword", Description: "An old sword, still sharp enough to cut.", Type: "weapon", Damage: 3},
-	{Name: "Short Sword", Description: "A well-balanced blade.", Type: "weapon", Damage: 5},
-	{Name: "Wooden Shield", Description: "A simple wooden shield that provides basic protection.", Type: "armor", Armor: 2},
-	{Name: "Iron Shield", Description: "A sturdy iron shield.", Type: "armor", Armor: 4},
+	{Name: "Health Potion", Description: "A red vial that restores health.", Type: "consumable", Healing: 10, Rarity: "common"},
+	{Name: "Greater Health Potion", Description: "A large red vial that restores significant health.", Type: "consumable", Healing: 20, Rarity: "uncommon"},
+	{Name: "Rusty Sword", Description: "An old sword, still sharp enough to cut.", Type: "weapon", Damage: 3, Rarity: "common"},
+	{Name: "Short Sword", Description: "A well-balanced blade.", Type: "weapon", Damage: 5, Rarity: "uncommon"},
+	{Name: "Wooden Shield", Description: "A simple wooden shield that provides basic protection.", Type: "armor", Armor: 2, Rarity: "common"},
+	{Name: "Iron Shield", Description: "A sturdy iron shield.", Type: "armor", Armor: 4, Rarity: "uncommon"},
 }
 
 // PopulateRoom adds monsters, items, and traps to a room
@@ -340,6 +341,7 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 			Description: "A red vial that restores health.",
 			Type:        "consumable",
 			Healing:     10,
+			Rarity:      "common",
 			RoomID:      &room.ID,
 		}
 		items = append(items, startPotion)
@@ -405,6 +407,7 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 			Damage:      template.Damage,
 			Armor:       template.Armor,
 			Healing:     template.Healing,
+			Rarity:      template.Rarity,
 			RoomID:      &room.ID,
 		}
 		items = append(items, item)

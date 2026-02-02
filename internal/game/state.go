@@ -6,6 +6,17 @@ import (
 	"time"
 )
 
+// TurnContext tracks per-turn state for the frontend
+type TurnContext struct {
+	LastEvent         *EventInfo
+	LastCombatResult  *EnhancedCombatResult
+	InventoryDelta    *InventoryDelta
+	TurnsInRoom       int
+	ConsecutiveCombat int
+	DefeatedMonsters  []string // Monster IDs defeated this turn
+	NewItems          []string // Item IDs discovered this turn
+}
+
 // GameState holds all in-memory game state
 type GameState struct {
 	Character    *Character
@@ -19,6 +30,7 @@ type GameState struct {
 	VisitedRooms map[string]bool              // keyed by room ID
 	GameOver     bool
 	Victory      bool
+	TurnContext  *TurnContext
 }
 
 // NewGameState creates an empty game state
@@ -31,7 +43,69 @@ func NewGameState() *GameState {
 		Items:        make(map[string]*Item),
 		Traps:        make(map[string]*Trap),
 		VisitedRooms: make(map[string]bool),
+		TurnContext:  &TurnContext{},
 	}
+}
+
+// ResetTurnContext clears the turn context at the start of each action
+func (gs *GameState) ResetTurnContext() {
+	gs.TurnContext = &TurnContext{
+		TurnsInRoom:       gs.TurnContext.TurnsInRoom,
+		ConsecutiveCombat: gs.TurnContext.ConsecutiveCombat,
+		InventoryDelta:    &InventoryDelta{},
+	}
+}
+
+// RecordItemTaken tracks an item added to inventory
+func (gs *GameState) RecordItemTaken(itemID string) {
+	if gs.TurnContext.InventoryDelta == nil {
+		gs.TurnContext.InventoryDelta = &InventoryDelta{}
+	}
+	gs.TurnContext.InventoryDelta.Added = append(gs.TurnContext.InventoryDelta.Added, itemID)
+	gs.TurnContext.NewItems = append(gs.TurnContext.NewItems, itemID)
+}
+
+// RecordItemUsed tracks an item used from inventory
+func (gs *GameState) RecordItemUsed(itemID string) {
+	if gs.TurnContext.InventoryDelta == nil {
+		gs.TurnContext.InventoryDelta = &InventoryDelta{}
+	}
+	gs.TurnContext.InventoryDelta.Used = append(gs.TurnContext.InventoryDelta.Used, itemID)
+}
+
+// RecordMonsterDefeated tracks a defeated monster
+func (gs *GameState) RecordMonsterDefeated(monsterID string) {
+	gs.TurnContext.DefeatedMonsters = append(gs.TurnContext.DefeatedMonsters, monsterID)
+}
+
+// IncrementTurnsInRoom increments the turns spent in current room
+func (gs *GameState) IncrementTurnsInRoom() {
+	gs.TurnContext.TurnsInRoom++
+}
+
+// ResetTurnsInRoom resets the turns counter when entering a new room
+func (gs *GameState) ResetTurnsInRoom() {
+	gs.TurnContext.TurnsInRoom = 0
+}
+
+// IncrementConsecutiveCombat increments consecutive combat turns
+func (gs *GameState) IncrementConsecutiveCombat() {
+	gs.TurnContext.ConsecutiveCombat++
+}
+
+// ResetConsecutiveCombat resets consecutive combat counter
+func (gs *GameState) ResetConsecutiveCombat() {
+	gs.TurnContext.ConsecutiveCombat = 0
+}
+
+// SetLastEvent sets the last event for this turn
+func (gs *GameState) SetLastEvent(event *EventInfo) {
+	gs.TurnContext.LastEvent = event
+}
+
+// SetLastCombatResult sets the last combat result for this turn
+func (gs *GameState) SetLastCombatResult(result *EnhancedCombatResult) {
+	gs.TurnContext.LastCombatResult = result
 }
 
 // IsInitialized returns true if a game has been started
